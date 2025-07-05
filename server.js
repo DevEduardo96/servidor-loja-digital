@@ -6,10 +6,13 @@ const { MercadoPagoConfig, Payment, Preference } = require("mercadopago");
 const app = express();
 app.use(
   cors({
-    origin: "https://artfix-loja.netlify.app",
+    origin: "https://artfix-loja.netlify.app", // Substitua pelo seu domínio se necessário
   })
 );
 app.use(express.json());
+
+// 🧠 Simula um "banco de dados" em memória
+const pagamentos = {};
 
 // ✅ Inicializa o cliente Mercado Pago
 const mpClient = new MercadoPagoConfig({
@@ -55,6 +58,13 @@ app.post("/criar-pagamento", async (req, res) => {
 
     const dados = pagamento.point_of_interaction.transaction_data;
 
+    // 🔐 Armazena o status inicial e o link do produto associado a esse pagamento
+    pagamentos[pagamento.id] = {
+      status: pagamento.status,
+      link: "https://exemplo.com/downloads/arquivo.zip", // 🔁 Substitua pelo link real
+      criadoEm: Date.now(),
+    };
+
     res.json({
       id: pagamento.id,
       status: pagamento.status,
@@ -77,6 +87,12 @@ app.get("/status-pagamento/:id", async (req, res) => {
 
   try {
     const pagamento = await paymentClient.get({ id });
+
+    // 🧠 Atualiza o status no armazenamento local
+    if (pagamentos[id]) {
+      pagamentos[id].status = pagamento.status;
+    }
+
     res.json({ status: pagamento.status });
   } catch (error) {
     console.error("Erro ao consultar status:", error.message);
@@ -108,8 +124,33 @@ app.post("/criar-preferencia", async (req, res) => {
   }
 });
 
+// 🔗 Rota protegida para fornecer o link de download após pagamento aprovado
+app.get("/link-download/:id", (req, res) => {
+  const id = req.params.id;
+
+  const registro = pagamentos[id];
+
+  if (!registro) {
+    return res.status(404).json({ erro: "Pagamento não encontrado." });
+  }
+
+  if (registro.status !== "approved") {
+    return res.status(403).json({ erro: "Pagamento ainda não foi aprovado." });
+  }
+
+  // ⏳ Expiração após 10 minutos
+  const agora = Date.now();
+  const expirado = agora - registro.criadoEm > 10 * 60 * 1000; // 10 min
+  if (expirado) {
+    return res.status(410).json({ erro: "Link expirado." });
+  }
+
+  return res.json({ link: registro.link });
+});
+
 // 🚀 Inicializa servidor
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
 });
+
