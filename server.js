@@ -4,7 +4,11 @@ const cors = require("cors");
 const { MercadoPagoConfig, Payment, Preference } = require("mercadopago");
 
 const app = express();
-app.use(cors());
+app.use(
+  cors({
+    origin: "https://artfix-loja.netlify.app",
+  })
+);
 app.use(express.json());
 
 // ✅ Inicializa o cliente Mercado Pago
