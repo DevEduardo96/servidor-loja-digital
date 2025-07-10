@@ -6,7 +6,7 @@ const { MercadoPagoConfig, Payment, Preference } = require("mercadopago");
 const app = express();
 app.use(
   cors({
-    origin: "https://artfix-loja.netlify.app", // Substitua pelo seu domínio se necessário
+    origin: "https://artfix-digital.netlify.app", // Substitua pelo seu domínio se necessário
   })
 );
 app.use(express.json());
