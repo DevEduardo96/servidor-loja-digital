@@ -4,17 +4,32 @@ const cors = require("cors");
 const { MercadoPagoConfig, Payment, Preference } = require("mercadopago");
 
 const app = express();
-app.use(
-  cors({
-    origin: "https://artfy.netlify.app", // Substitua pelo seu domínio se necessário
-  })
-);
+
+// Configuração CORS com origem correta sem barra no final
+const allowedOrigins = [
+  "https://artfy.netlify.app",
+  "http://localhost:5173", // para desenvolvimento local, se quiser
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Permite requisições sem origin (ex: Postman)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    } else {
+      return callback(new Error("CORS origin não permitida"));
+    }
+  }
+}));
+
 app.use(express.json());
 
-// 🧠 Simula um "banco de dados" em memória
+// Simula um "banco de dados" em memória
 const pagamentos = {};
 
-// ✅ Inicializa o cliente Mercado Pago
+// Inicializa o cliente Mercado Pago
 const mpClient = new MercadoPagoConfig({
   accessToken: process.env.MP_ACCESS_TOKEN,
 });
@@ -22,7 +37,12 @@ const mpClient = new MercadoPagoConfig({
 const paymentClient = new Payment(mpClient);
 const preferenceClient = new Preference(mpClient);
 
-// 🔄 Rota para gerar QR Code de pagamento Pix
+// Rota teste simples para verificar se backend está online
+app.get("/", (req, res) => {
+  res.send("Backend rodando!");
+});
+
+// Rota para gerar QR Code de pagamento Pix
 app.post("/criar-pagamento", async (req, res) => {
   const { carrinho, nomeCliente, total, email } = req.body;
 
@@ -58,10 +78,10 @@ app.post("/criar-pagamento", async (req, res) => {
 
     const dados = pagamento.point_of_interaction.transaction_data;
 
-    // 🔐 Armazena o status inicial e o link do produto associado a esse pagamento
+    // Armazena status inicial e link do produto associado ao pagamento
     pagamentos[pagamento.id] = {
       status: pagamento.status,
-      link: "https://exemplo.com/downloads/arquivo.zip", // 🔁 Substitua pelo link real
+      link: "https://exemplo.com/downloads/arquivo.zip", // Substitua pelo link real
       criadoEm: Date.now(),
     };
 
@@ -81,14 +101,13 @@ app.post("/criar-pagamento", async (req, res) => {
   }
 });
 
-// 🔄 Consulta status do pagamento Pix
+// Consulta status do pagamento Pix
 app.get("/status-pagamento/:id", async (req, res) => {
   const id = req.params.id;
 
   try {
     const pagamento = await paymentClient.get({ id });
 
-    // 🧠 Atualiza o status no armazenamento local
     if (pagamentos[id]) {
       pagamentos[id].status = pagamento.status;
     }
@@ -100,18 +119,18 @@ app.get("/status-pagamento/:id", async (req, res) => {
   }
 });
 
-// 🔄 Rota para gerar preferência de pagamento (Checkout Pro)
+// Rota para gerar preferência de pagamento (Checkout Pro)
 app.post("/criar-preferencia", async (req, res) => {
   try {
-    const { itens } = req.body; // Array de { title, quantity, unit_price }
+    const { itens } = req.body;
 
     const resposta = await preferenceClient.create({
       body: {
         items: itens,
         back_urls: {
-          success: "https://sualoja.com/sucesso",
-          failure: "https://sualoja.com/erro",
-          pending: "https://sualoja.com/pendente",
+          success: "https://artfy.netlify.app/sucesso",
+          failure: "https://artfy.netlify.app/erro",
+          pending: "https://artfy.netlify.app/pendente",
         },
         auto_return: "approved",
       },
@@ -124,7 +143,7 @@ app.post("/criar-preferencia", async (req, res) => {
   }
 });
 
-// 🔗 Rota protegida para fornecer o link de download após pagamento aprovado
+// Rota protegida para fornecer link de download após pagamento aprovado
 app.get("/link-download/:id", (req, res) => {
   const id = req.params.id;
 
@@ -138,9 +157,8 @@ app.get("/link-download/:id", (req, res) => {
     return res.status(403).json({ erro: "Pagamento ainda não foi aprovado." });
   }
 
-  // ⏳ Expiração após 10 minutos
   const agora = Date.now();
-  const expirado = agora - registro.criadoEm > 10 * 60 * 1000; // 10 min
+  const expirado = agora - registro.criadoEm > 10 * 60 * 1000;
   if (expirado) {
     return res.status(410).json({ erro: "Link expirado." });
   }
@@ -148,9 +166,7 @@ app.get("/link-download/:id", (req, res) => {
   return res.json({ link: registro.link });
 });
 
-// 🚀 Inicializa servidor
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
 });
-
