@@ -1,48 +1,45 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const axios = require("axios");
 const { MercadoPagoConfig, Payment, Preference } = require("mercadopago");
 
 const app = express();
 
-// Configuração CORS com origem correta sem barra no final
+// ✅ CORS
 const allowedOrigins = [
   "https://artfy.netlify.app",
-  "http://localhost:5173", // para desenvolvimento local, se quiser
+  "http://localhost:5173",
 ];
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Permite requisições sem origin (ex: Postman)
-    if (!origin) return callback(null, true);
-
-    if (allowedOrigins.includes(origin)) {
+    if (!origin || allowedOrigins.includes(origin)) {
       return callback(null, true);
     } else {
-      return callback(new Error("CORS origin não permitida"));
+      return callback(new Error("CORS origin não permitida: " + origin));
     }
   }
 }));
 
 app.use(express.json());
 
-// Simula um "banco de dados" em memória
-const pagamentos = {};
-
-// Inicializa o cliente Mercado Pago
+// 🔒 Configura Mercado Pago
 const mpClient = new MercadoPagoConfig({
   accessToken: process.env.MP_ACCESS_TOKEN,
 });
-
 const paymentClient = new Payment(mpClient);
 const preferenceClient = new Preference(mpClient);
 
-// Rota teste simples para verificar se backend está online
+// 🧠 Banco temporário
+const pagamentos = {};
+
+// 🔍 Teste
 app.get("/", (req, res) => {
-  res.send("Backend rodando!");
+  res.send("✅ Backend rodando!");
 });
 
-// Rota para gerar QR Code de pagamento Pix
+// 📤 Criar pagamento Pix
 app.post("/criar-pagamento", async (req, res) => {
   const { carrinho, nomeCliente, total, email } = req.body;
 
@@ -71,19 +68,22 @@ app.post("/criar-pagamento", async (req, res) => {
         description: "Compra de produtos digitais",
         payer: {
           email: email || "comprador@email.com",
-          first_name: nomeCliente,
+          first_name: nomeCliente || "Cliente",
         },
       },
     });
 
     const dados = pagamento.point_of_interaction.transaction_data;
 
-    // Armazena status inicial e link do produto associado ao pagamento
     pagamentos[pagamento.id] = {
       status: pagamento.status,
-      link: "https://exemplo.com/downloads/arquivo.zip", // Substitua pelo link real
+      link: "https://exemplo.com/downloads/arquivo.zip", // Substitua
       criadoEm: Date.now(),
+      email,
+      nomeCliente,
     };
+
+    console.log("✅ Pagamento criado:", pagamento.id);
 
     res.json({
       id: pagamento.id,
@@ -93,33 +93,57 @@ app.post("/criar-pagamento", async (req, res) => {
       ticket_url: dados.ticket_url,
     });
   } catch (error) {
-    console.error("❌ Erro ao gerar pagamento Pix:", error.message);
+    console.error("❌ Erro ao gerar pagamento Pix:", error?.message || error);
     res.status(500).json({
       error: "Erro ao gerar pagamento Pix",
-      detalhes: error.message,
+      detalhes: error?.message || "Erro desconhecido",
     });
   }
 });
 
-// Consulta status do pagamento Pix
+// 🔎 Verificar status e salvar no Supabase
 app.get("/status-pagamento/:id", async (req, res) => {
   const id = req.params.id;
 
   try {
     const pagamento = await paymentClient.get({ id });
+    const status = pagamento.status;
 
     if (pagamentos[id]) {
-      pagamentos[id].status = pagamento.status;
+      pagamentos[id].status = status;
     }
 
-    res.json({ status: pagamento.status });
+    // Envia pro Supabase se aprovado
+    if (status === "approved" && pagamentos[id]?.email) {
+      const { email, nomeCliente, link } = pagamentos[id];
+
+      try {
+        await axios.post(`${process.env.SUPABASE_URL}/rest/v1/download`, {
+          email,
+          nome_cliente: nomeCliente,
+          link,
+        }, {
+          headers: {
+            "Content-Type": "application/json",
+            apikey: process.env.SUPABASE_SERVICE_KEY,
+            Authorization: `Bearer ${process.env.SUPABASE_SERVICE_KEY}`,
+          },
+        });
+
+        console.log("📨 Registro salvo no Supabase.");
+      } catch (e) {
+        console.error("❌ Falha ao salvar no Supabase:", e.response?.data || e.message);
+      }
+    }
+
+    res.json({ status });
   } catch (error) {
-    console.error("Erro ao consultar status:", error.message);
+    console.error("❌ Erro ao consultar pagamento:", error?.message || error);
     res.status(500).json({ error: "Erro ao consultar pagamento" });
   }
 });
 
-// Rota para gerar preferência de pagamento (Checkout Pro)
+// 🛒 Checkout Pro
 app.post("/criar-preferencia", async (req, res) => {
   try {
     const { itens } = req.body;
@@ -138,15 +162,14 @@ app.post("/criar-preferencia", async (req, res) => {
 
     res.json({ init_point: resposta.init_point });
   } catch (error) {
-    console.error("Erro ao criar preferência:", error.message);
+    console.error("❌ Erro ao criar preferência:", error?.message || error);
     res.status(500).json({ error: "Erro ao criar preferência" });
   }
 });
 
-// Rota protegida para fornecer link de download após pagamento aprovado
+// 🔐 Link de download protegido
 app.get("/link-download/:id", (req, res) => {
   const id = req.params.id;
-
   const registro = pagamentos[id];
 
   if (!registro) {
@@ -166,9 +189,8 @@ app.get("/link-download/:id", (req, res) => {
   return res.json({ link: registro.link });
 });
 
+// 🚀 Start
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
 });
-
-
