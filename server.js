@@ -1,7 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const { MercadoPago } = require("@mercadopago/sdk-node");
+const mercadopago = require("mercadopago");
 
 const app = express();
 
@@ -22,12 +22,9 @@ app.use(cors({
 
 app.use(express.json());
 
-// Configura o MercadoPago com seu token de acesso
-const mp = new MercadoPago({
-  accessToken: process.env.MP_ACCESS_TOKEN,
-});
+// Configura o SDK Mercado Pago com access token direto (sem configure())
+mercadopago.access_token = process.env.MP_ACCESS_TOKEN;
 
-// Pagamentos temporários em memória
 const pagamentos = {};
 
 app.get("/", (req, res) => {
@@ -53,7 +50,8 @@ app.post("/criar-pagamento", async (req, res) => {
       return res.status(400).json({ error: "Valor total inválido" });
     }
 
-    const pagamento = await mp.payment.create({
+    // Cria o pagamento Pix
+    const pagamento = await mercadopago.payment.create({
       transaction_amount: valorTotal,
       description: "Compra de produtos digitais",
       payment_method_id: "pix",
@@ -92,7 +90,7 @@ app.get("/status-pagamento/:id", async (req, res) => {
   if (!id) return res.status(400).json({ error: "ID do pagamento obrigatório" });
 
   try {
-    const pagamento = await mp.payment.get(id);
+    const pagamento = await mercadopago.payment.get(id);
 
     if (!pagamento || !pagamento.body) {
       return res.status(404).json({ error: "Pagamento não encontrado" });
