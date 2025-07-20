@@ -22,10 +22,30 @@ app.use(cors({
 
 app.use(express.json());
 
+// ===== LOGS DE DIAGNÓSTICO =====
+console.log("🔍 DIAGNÓSTICO MERCADO PAGO:");
+console.log("MP_ACCESS_TOKEN existe?", !!process.env.MP_ACCESS_TOKEN);
+console.log("MP_ACCESS_TOKEN valor:", process.env.MP_ACCESS_TOKEN ? "Token carregado" : "UNDEFINED/VAZIO");
+console.log("MercadoPago importado:", typeof MercadoPago);
+console.log("MercadoPago constructor:", MercadoPago);
+
 // Instancia MercadoPago com token de acesso
 const mercadopago = new MercadoPago({
   accessToken: process.env.MP_ACCESS_TOKEN,
 });
+
+// ===== MAIS LOGS DE DIAGNÓSTICO =====
+console.log("mercadopago instância criada:", !!mercadopago);
+console.log("mercadopago tipo:", typeof mercadopago);
+console.log("mercadopago.payments existe?", !!mercadopago.payments);
+console.log("mercadopago.payments tipo:", typeof mercadopago.payments);
+if (mercadopago.payments) {
+  console.log("mercadopago.payments.create existe?", !!mercadopago.payments.create);
+  console.log("mercadopago.payments.create tipo:", typeof mercadopago.payments.create);
+} else {
+  console.log("❌ mercadopago.payments é undefined!");
+}
+console.log("Propriedades disponíveis em mercadopago:", Object.keys(mercadopago));
 
 // Banco temporário em memória para armazenar status e links
 const pagamentos = {};
@@ -53,6 +73,20 @@ app.post("/criar-pagamento", async (req, res) => {
 
     if (isNaN(valorTotal) || valorTotal <= 0) {
       return res.status(400).json({ error: "Valor total inválido" });
+    }
+
+    // ===== LOGS ANTES DO CREATE =====
+    console.log("🚨 TENTANDO CRIAR PAGAMENTO:");
+    console.log("mercadopago objeto:", mercadopago);
+    console.log("mercadopago.payments:", mercadopago.payments);
+    console.log("Tipo de mercadopago.payments:", typeof mercadopago.payments);
+    
+    if (!mercadopago.payments) {
+      throw new Error("mercadopago.payments é undefined - verifique a versão do SDK");
+    }
+    
+    if (!mercadopago.payments.create) {
+      throw new Error("mercadopago.payments.create é undefined - método não existe");
     }
 
     // Cria pagamento via SDK Mercado Pago - método correto para versão 2.x
@@ -87,6 +121,7 @@ app.post("/criar-pagamento", async (req, res) => {
     });
   } catch (error) {
     console.error("Erro ao criar pagamento Pix:", error);
+    console.error("Stack trace completo:", error.stack);
     res.status(500).json({ error: "Erro ao criar pagamento Pix", detalhes: error.toString() });
   }
 });
@@ -95,4 +130,5 @@ app.post("/criar-pagamento", async (req, res) => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
+  console.log("=".repeat(50));
 });
