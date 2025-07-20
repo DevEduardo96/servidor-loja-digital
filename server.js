@@ -27,6 +27,45 @@ const client = new MercadoPagoConfig({
   accessToken: process.env.MP_ACCESS_TOKEN,
 });
 
+// ✅ Endpoint adicional para compatibilidade com frontend
+app.get("/status-pagamento/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    console.log("🔍 Verificando status para ID:", id);
+    
+    // Busca o pagamento no Mercado Pago
+    const pagamento = await payment.get({ id });
+    
+    console.log("📋 Status encontrado:", pagamento.status);
+    console.log("🎯 Transaction data:", pagamento.point_of_interaction?.transaction_data);
+    
+    // Atualiza status local se existir
+    if (pagamentos[id]) {
+      pagamentos[id].status = pagamento.status;
+    }
+    
+    // Dados do QR Code PIX
+    const transactionData = pagamento.point_of_interaction?.transaction_data || {};
+    
+    const response = {
+      id: pagamento.id,
+      status: pagamento.status,
+      qr_code: transactionData.qr_code || null,
+      qr_code_base64: transactionData.qr_code_base64 || null,
+      ticket_url: transactionData.ticket_url || null,
+      link: pagamentos[id]?.link || null
+    };
+    
+    console.log("📤 Resposta /status-pagamento:", response);
+    
+    res.json(response);
+  } catch (error) {
+    console.error("❌ Erro ao verificar status-pagamento:", error);
+    res.status(500).json({ error: "Erro ao verificar pagamento" });
+  }
+});
+
 // ✅ Instância do Payment usando o client
 const payment = new Payment(client);
 
@@ -77,7 +116,13 @@ app.post("/criar-pagamento", async (req, res) => {
     });
 
     console.log("✅ Pagamento criado com sucesso! ID:", pagamento.id);
-
+    
+    // 🔍 DEBUGGING: Log completo da resposta
+    console.log("📋 Resposta completa do pagamento:");
+    console.log("Status:", pagamento.status);
+    console.log("Point of interaction:", JSON.stringify(pagamento.point_of_interaction, null, 2));
+    console.log("Transaction data:", pagamento.point_of_interaction?.transaction_data);
+    
     // Armazena dados temporariamente para controle
     pagamentos[pagamento.id] = {
       status: pagamento.status,
@@ -90,13 +135,19 @@ app.post("/criar-pagamento", async (req, res) => {
     // Dados do QR Code Pix
     const transactionData = pagamento.point_of_interaction?.transaction_data || {};
 
-    res.json({
+    const response = {
       id: pagamento.id,
       status: pagamento.status,
       qr_code: transactionData.qr_code || null,
       qr_code_base64: transactionData.qr_code_base64 || null,
       ticket_url: transactionData.ticket_url || null,
-    });
+      // Dados extras para debugging
+      full_response: process.env.NODE_ENV === 'development' ? pagamento : undefined
+    };
+    
+    console.log("📤 Resposta enviada:", response);
+    
+    res.json(response);
   } catch (error) {
     console.error("❌ Erro ao criar pagamento Pix:", error);
     
@@ -127,7 +178,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
   }
 });
 
-// Verificar status de pagamento
+// Verificar status de pagamento (endpoint original)
 app.get("/pagamento/:id", async (req, res) => {
   try {
     const { id } = req.params;
