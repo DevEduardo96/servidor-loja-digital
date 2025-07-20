@@ -22,18 +22,19 @@ app.use(cors({
 
 app.use(express.json());
 
-// instancia MercadoPago com token
+// Instancia MercadoPago com token de acesso
 const mercadopago = new MercadoPago({
   accessToken: process.env.MP_ACCESS_TOKEN,
 });
 
-// banco temporário
+// Banco temporário em memória para armazenar status e links
 const pagamentos = {};
 
 app.get("/", (req, res) => {
   res.send("✅ Backend Mercado Pago rodando!");
 });
 
+// Criar pagamento Pix
 app.post("/criar-pagamento", async (req, res) => {
   try {
     const { nomeCliente, email, total } = req.body;
@@ -42,6 +43,7 @@ app.post("/criar-pagamento", async (req, res) => {
       return res.status(400).json({ error: "Faltando dados obrigatórios" });
     }
 
+    // Converter total para número, ex: "R$ 10,00" => 10.00
     let valorTotal = 0;
     if (typeof total === "string") {
       valorTotal = parseFloat(total.replace("R$", "").replace(/\./g, "").replace(",", "."));
@@ -53,7 +55,8 @@ app.post("/criar-pagamento", async (req, res) => {
       return res.status(400).json({ error: "Valor total inválido" });
     }
 
-    const pagamento = await mercadopago.payment.create({
+    // Cria pagamento via SDK Mercado Pago - método correto para versão 2.x
+    const pagamento = await mercadopago.payments.create({
       transaction_amount: valorTotal,
       description: "Compra de produtos digitais",
       payment_method_id: "pix",
@@ -63,14 +66,16 @@ app.post("/criar-pagamento", async (req, res) => {
       },
     });
 
+    // Armazena dados temporariamente para controle
     pagamentos[pagamento.id] = {
       status: pagamento.status,
       email,
       nomeCliente,
       criadoEm: Date.now(),
-      link: "https://exemplo.com/downloads/arquivo.zip",
+      link: "https://exemplo.com/downloads/arquivo.zip", // ajuste seu link real aqui
     };
 
+    // Dados do QR Code Pix
     const transactionData = pagamento.point_of_interaction?.transaction_data || {};
 
     res.json({
@@ -86,6 +91,7 @@ app.post("/criar-pagamento", async (req, res) => {
   }
 });
 
+// Iniciar servidor
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
