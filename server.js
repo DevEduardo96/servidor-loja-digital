@@ -22,8 +22,8 @@ app.use(cors({
 
 app.use(express.json());
 
-// Configura o SDK Mercado Pago com access token direto (sem configure())
-mercadopago.access_token = process.env.MP_ACCESS_TOKEN;
+// Configura o token com o método correto
+mercadopago.configurations.setAccessToken(process.env.MP_ACCESS_TOKEN);
 
 const pagamentos = {};
 
@@ -50,7 +50,6 @@ app.post("/criar-pagamento", async (req, res) => {
       return res.status(400).json({ error: "Valor total inválido" });
     }
 
-    // Cria o pagamento Pix
     const pagamento = await mercadopago.payment.create({
       transaction_amount: valorTotal,
       description: "Compra de produtos digitais",
@@ -80,60 +79,8 @@ app.post("/criar-pagamento", async (req, res) => {
     });
   } catch (error) {
     console.error("Erro ao criar pagamento Pix:", error);
-    res.status(500).json({ error: "Erro ao criar pagamento Pix", detalhes: error.message });
+    res.status(500).json({ error: "Erro ao criar pagamento Pix", detalhes: error.toString() });
   }
-});
-
-app.get("/status-pagamento/:id", async (req, res) => {
-  const { id } = req.params;
-
-  if (!id) return res.status(400).json({ error: "ID do pagamento obrigatório" });
-
-  try {
-    const pagamento = await mercadopago.payment.get(id);
-
-    if (!pagamento || !pagamento.body) {
-      return res.status(404).json({ error: "Pagamento não encontrado" });
-    }
-
-    if (!pagamentos[id]) {
-      return res.status(404).json({ error: "Pagamento não registrado no sistema" });
-    }
-
-    pagamentos[id].status = pagamento.body.status;
-
-    const transactionData = pagamento.body.point_of_interaction?.transaction_data || {};
-
-    return res.json({
-      status: pagamento.body.status,
-      qr_code_base64: transactionData.qr_code_base64 || null,
-      link: pagamento.body.status === "approved" ? pagamentos[id].link : null,
-    });
-  } catch (error) {
-    console.error("Erro ao consultar pagamento:", error);
-    res.status(500).json({ error: "Erro ao consultar pagamento", detalhes: error.message });
-  }
-});
-
-app.get("/link-download/:id", (req, res) => {
-  const { id } = req.params;
-  const registro = pagamentos[id];
-
-  if (!registro) return res.status(404).json({ error: "Pagamento não encontrado." });
-
-  if (registro.status !== "approved") return res.status(403).json({ error: "Pagamento não aprovado." });
-
-  const expiracao = 10 * 60 * 1000;
-  if (Date.now() - registro.criadoEm > expiracao) return res.status(410).json({ error: "Link expirado." });
-
-  return res.json({ link: registro.link });
-});
-
-app.use((err, req, res, next) => {
-  if (err.message.startsWith("CORS origin não permitida")) {
-    return res.status(403).json({ error: err.message });
-  }
-  next(err);
 });
 
 const PORT = process.env.PORT || 3001;
