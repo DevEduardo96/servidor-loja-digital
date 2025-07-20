@@ -1,7 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const mercadopago = require("mercadopago");
+const { default: MercadoPago } = require("mercadopago");
 
 const app = express();
 
@@ -22,9 +22,12 @@ app.use(cors({
 
 app.use(express.json());
 
-// Configura o token com o método correto
-mercadopago.configurations.setAccessToken(process.env.MP_ACCESS_TOKEN);
+// instancia MercadoPago com token
+const mercadopago = new MercadoPago({
+  accessToken: process.env.MP_ACCESS_TOKEN,
+});
 
+// banco temporário
 const pagamentos = {};
 
 app.get("/", (req, res) => {
@@ -60,19 +63,19 @@ app.post("/criar-pagamento", async (req, res) => {
       },
     });
 
-    pagamentos[pagamento.body.id] = {
-      status: pagamento.body.status,
+    pagamentos[pagamento.id] = {
+      status: pagamento.status,
       email,
       nomeCliente,
       criadoEm: Date.now(),
       link: "https://exemplo.com/downloads/arquivo.zip",
     };
 
-    const transactionData = pagamento.body.point_of_interaction?.transaction_data || {};
+    const transactionData = pagamento.point_of_interaction?.transaction_data || {};
 
     res.json({
-      id: pagamento.body.id,
-      status: pagamento.body.status,
+      id: pagamento.id,
+      status: pagamento.status,
       qr_code: transactionData.qr_code || null,
       qr_code_base64: transactionData.qr_code_base64 || null,
       ticket_url: transactionData.ticket_url || null,
