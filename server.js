@@ -1,11 +1,10 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const mercadopago = require("mercadopago");
+const { MercadoPago } = require("@mercadopago/sdk-node");
 
 const app = express();
 
-// Configuração CORS
 const allowedOrigins = [
   "https://artfy.netlify.app",
   "http://localhost:5173",
@@ -23,30 +22,26 @@ app.use(cors({
 
 app.use(express.json());
 
-// Configura Mercado Pago (SDK antiga)
-mercadopago.configure({
-  access_token: process.env.MP_ACCESS_TOKEN,
+// Configura o MercadoPago com seu token de acesso
+const mp = new MercadoPago({
+  accessToken: process.env.MP_ACCESS_TOKEN,
 });
 
-// Banco temporário em memória para pagamentos
-// Importante: para produção, use banco persistente e implemente limpeza periódica
+// Pagamentos temporários em memória
 const pagamentos = {};
 
-// Endpoint de teste
 app.get("/", (req, res) => {
   res.send("✅ Backend Mercado Pago rodando!");
 });
 
-// Criar pagamento Pix
 app.post("/criar-pagamento", async (req, res) => {
   try {
     const { nomeCliente, email, total } = req.body;
 
     if (!nomeCliente || !email || !total) {
-      return res.status(400).json({ error: "Faltando dados obrigatórios: nomeCliente, email ou total" });
+      return res.status(400).json({ error: "Faltando dados obrigatórios" });
     }
 
-    // Normaliza valor total
     let valorTotal = 0;
     if (typeof total === "string") {
       valorTotal = parseFloat(total.replace("R$", "").replace(/\./g, "").replace(",", "."));
@@ -58,8 +53,7 @@ app.post("/criar-pagamento", async (req, res) => {
       return res.status(400).json({ error: "Valor total inválido" });
     }
 
-    // Cria pagamento Pix
-    const pagamento = await mercadopago.payment.create({
+    const pagamento = await mp.payment.create({
       transaction_amount: valorTotal,
       description: "Compra de produtos digitais",
       payment_method_id: "pix",
@@ -69,13 +63,12 @@ app.post("/criar-pagamento", async (req, res) => {
       },
     });
 
-    // Guarda dados para consultar depois
     pagamentos[pagamento.body.id] = {
       status: pagamento.body.status,
       email,
       nomeCliente,
       criadoEm: Date.now(),
-      link: "https://exemplo.com/downloads/arquivo.zip", // Ajuste para link real
+      link: "https://exemplo.com/downloads/arquivo.zip",
     };
 
     const transactionData = pagamento.body.point_of_interaction?.transaction_data || {};
@@ -93,14 +86,13 @@ app.post("/criar-pagamento", async (req, res) => {
   }
 });
 
-// Consultar status do pagamento e retornar QR Code se pendente
 app.get("/status-pagamento/:id", async (req, res) => {
   const { id } = req.params;
 
   if (!id) return res.status(400).json({ error: "ID do pagamento obrigatório" });
 
   try {
-    const pagamento = await mercadopago.payment.get(id);
+    const pagamento = await mp.payment.get(id);
 
     if (!pagamento || !pagamento.body) {
       return res.status(404).json({ error: "Pagamento não encontrado" });
@@ -110,12 +102,10 @@ app.get("/status-pagamento/:id", async (req, res) => {
       return res.status(404).json({ error: "Pagamento não registrado no sistema" });
     }
 
-    // Atualiza status no objeto local
     pagamentos[id].status = pagamento.body.status;
 
     const transactionData = pagamento.body.point_of_interaction?.transaction_data || {};
 
-    // Retorna status, qr_code_base64 e link para download se aprovado
     return res.json({
       status: pagamento.body.status,
       qr_code_base64: transactionData.qr_code_base64 || null,
@@ -127,7 +117,6 @@ app.get("/status-pagamento/:id", async (req, res) => {
   }
 });
 
-// Endpoint para retornar link de download seguro, somente se pagamento aprovado e não expirado
 app.get("/link-download/:id", (req, res) => {
   const { id } = req.params;
   const registro = pagamentos[id];
@@ -136,13 +125,12 @@ app.get("/link-download/:id", (req, res) => {
 
   if (registro.status !== "approved") return res.status(403).json({ error: "Pagamento não aprovado." });
 
-  const expiracao = 10 * 60 * 1000; // 10 minutos
+  const expiracao = 10 * 60 * 1000;
   if (Date.now() - registro.criadoEm > expiracao) return res.status(410).json({ error: "Link expirado." });
 
   return res.json({ link: registro.link });
 });
 
-// Middleware para tratamento de erros CORS
 app.use((err, req, res, next) => {
   if (err.message.startsWith("CORS origin não permitida")) {
     return res.status(403).json({ error: err.message });
@@ -150,7 +138,6 @@ app.use((err, req, res, next) => {
   next(err);
 });
 
-// Inicializa servidor
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
