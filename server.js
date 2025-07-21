@@ -4,13 +4,30 @@ const cors = require("cors");
 const { MercadoPagoConfig, Payment } = require("mercadopago");
 const { createClient } = require("@supabase/supabase-js");
 
+// Configuração Supabase
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error("Variáveis SUPABASE_URL e SUPABASE_ANON_KEY são obrigatórias.");
+}
+
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// Config Mercado Pago
+const client = new MercadoPagoConfig({
+  accessToken: process.env.MP_ACCESS_TOKEN,
+});
+const payment = new Payment(client);
+
 const app = express();
 
-// Supabase Client
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+// CORS liberado só para origens seguras
+const allowedOrigins = [
+  "https://artfy.netlify.app",
+  "http://localhost:5173",
+];
 
-// CORS
-const allowedOrigins = ["https://artfy.netlify.app", "http://localhost:5173"];
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
@@ -23,64 +40,77 @@ app.use(cors({
 
 app.use(express.json());
 
-// Mercado Pago SDK
-const client = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN });
-const payment = new Payment(client);
-
-// Banco em memória (temporário)
+// Banco temporário em memória
 const pagamentos = {};
 
+// Rota teste
 app.get("/", (req, res) => {
   res.send("✅ Backend Mercado Pago rodando!");
 });
 
-// 🔧 Criar pagamento PIX com produto vindo do Supabase
+// Rota criar pagamento PIX para carrinho com vários produtos
 app.post("/criar-pagamento", async (req, res) => {
   try {
-    const { nomeCliente, email, produtoId } = req.body;
+    const { nomeCliente, email, carrinho, total } = req.body;
 
-    if (!nomeCliente || !email || !produtoId) {
-      return res.status(400).json({ error: "Dados obrigatórios ausentes" });
+    if (!nomeCliente || !email || !carrinho || !Array.isArray(carrinho) || carrinho.length === 0) {
+      return res.status(400).json({ error: "Dados obrigatórios ausentes ou inválidos" });
     }
 
-    // 🔎 Buscar produto no Supabase
-    const { data: produto, error } = await supabase
-      .from("produtos")
-      .select("*")
-      .eq("id", produtoId)
-      .single();
-
-    if (error || !produto) {
-      return res.status(404).json({ error: "Produto não encontrado" });
+    // Validação do total
+    let valorTotal = 0;
+    if (typeof total === "string") {
+      valorTotal = parseFloat(total.replace("R$", "").replace(/\./g, "").replace(",", "."));
+    } else if (typeof total === "number") {
+      valorTotal = total;
     }
 
-    console.log("🛍️ Criando pagamento para:", produto.nome, "- Valor:", produto.preco);
+    if (isNaN(valorTotal) || valorTotal <= 0) {
+      return res.status(400).json({ error: "Valor total inválido" });
+    }
 
+    // Caso queira validar/corrigir links direto do Supabase:
+    // Exemplo de busca para garantir links atualizados
+    // (opcional, pode confiar no que vem do frontend)
+    /*
+    const produtosIds = carrinho.map(item => item.product.id);
+    const { data: produtosDB, error } = await supabase
+      .from("Produtos")
+      .select("id, link_download")
+      .in("id", produtosIds);
+    if (error) {
+      console.error("Erro ao buscar produtos no Supabase:", error);
+      return res.status(500).json({ error: "Erro interno ao buscar produtos" });
+    }
+    */
+
+    // Para simplificar, pega links do carrinho que veio no corpo
+    const linksComprados = carrinho.map(item => item.product.link_download).filter(Boolean);
+
+    // Cria pagamento no Mercado Pago
     const pagamento = await payment.create({
       body: {
-        transaction_amount: produto.preco,
-        description: `Compra: ${produto.nome}`,
+        transaction_amount: valorTotal,
+        description: `Compra de ${carrinho.length} produtos digitais`,
         payment_method_id: "pix",
         payer: {
-          email: "cliente@artfy.com",
+          email,
           first_name: nomeCliente,
         },
       }
     });
-
-    console.log("✅ Pagamento criado:", pagamento.id);
-
-    const txData = pagamento.point_of_interaction?.transaction_data || {};
 
     pagamentos[pagamento.id] = {
       status: pagamento.status,
       email,
       nomeCliente,
       criadoEm: Date.now(),
-      link: produto.link_download, // 👈 Link real do produto
+      links: linksComprados,
     };
 
-    res.json({
+    const txData = pagamento.point_of_interaction?.transaction_data || {};
+
+    return res.json({
       id: pagamento.id,
       status: pagamento.status,
       qr_code: txData.qr_code || null,
@@ -88,12 +118,12 @@ app.post("/criar-pagamento", async (req, res) => {
       ticket_url: txData.ticket_url || null,
     });
   } catch (error) {
-    console.error("❌ Erro ao criar pagamento:", error);
-    res.status(500).json({ error: "Erro ao criar pagamento", detalhes: error.message });
+    console.error("Erro ao criar pagamento:", error);
+    return res.status(500).json({ error: "Erro ao criar pagamento", detalhes: error.message });
   }
 });
 
-// 🔄 Verificar status de pagamento
+// Rota para consultar status do pagamento
 app.get("/status-pagamento/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -111,15 +141,15 @@ app.get("/status-pagamento/:id", async (req, res) => {
       qr_code: txData.qr_code || null,
       qr_code_base64: txData.qr_code_base64 || null,
       ticket_url: txData.ticket_url || null,
-      link: pagamentos[id]?.link || null,
+      links: pagamentos[id]?.links || [],
     });
   } catch (error) {
-    console.error("❌ Erro ao consultar status:", error.message);
+    console.error("Erro ao consultar status:", error.message);
     res.status(500).json({ error: "Erro ao consultar pagamento" });
   }
 });
 
-// 🔓 Link de download se pagamento aprovado
+// Rota entrega links após pagamento aprovado
 app.get("/link-download/:id", (req, res) => {
   const { id } = req.params;
   const registro = pagamentos[id];
@@ -132,43 +162,22 @@ app.get("/link-download/:id", (req, res) => {
     return res.status(403).json({ erro: "Pagamento ainda não foi aprovado." });
   }
 
-  const expirado = Date.now() - registro.criadoEm > 10 * 60 * 1000;
+  const expirado = Date.now() - registro.criadoEm > 10 * 60 * 1000; // 10 minutos
   if (expirado) {
     return res.status(410).json({ erro: "Link expirado." });
   }
 
-  return res.json({ link: registro.link });
+  return res.json({ links: registro.links });
 });
 
-// 🔔 Webhook (ainda não implementado)
+// Webhook (opcional)
 app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
-  console.log("📩 Webhook recebido:", req.body);
+  console.log("Webhook recebido:", req.body);
   res.status(200).send("OK");
 });
 
-// 🔎 Consulta de backup
-app.get("/pagamento/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const pagamento = await payment.get({ id });
-
-    if (pagamentos[id]) {
-      pagamentos[id].status = pagamento.status;
-    }
-
-    res.json({
-      id: pagamento.id,
-      status: pagamento.status,
-      link: pagamentos[id]?.link || null,
-    });
-  } catch (error) {
-    console.error("❌ Erro ao verificar pagamento:", error.message);
-    res.status(500).json({ error: "Erro ao verificar pagamento" });
-  }
-});
-
-// 🚀 Iniciar servidor
+// Inicia servidor
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor rodando na porta ${PORT}`);
+  console.log(`Servidor rodando na porta ${PORT}`);
 });
