@@ -2,15 +2,15 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { MercadoPagoConfig, Payment } = require("mercadopago");
+const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
 
-// CORS liberado para origens seguras
-const allowedOrigins = [
-  "https://artfy.netlify.app",
-  "http://localhost:5173",
-];
+// Supabase Client
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
+// CORS
+const allowedOrigins = ["https://artfy.netlify.app", "http://localhost:5173"];
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
@@ -23,49 +23,46 @@ app.use(cors({
 
 app.use(express.json());
 
-// Instância do Mercado Pago SDK v2
-const client = new MercadoPagoConfig({
-  accessToken: process.env.MP_ACCESS_TOKEN,
-});
+// Mercado Pago SDK
+const client = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN });
 const payment = new Payment(client);
 
-// Banco de dados temporário (memória)
+// Banco em memória (temporário)
 const pagamentos = {};
 
 app.get("/", (req, res) => {
   res.send("✅ Backend Mercado Pago rodando!");
 });
 
-// 🔧 ROTA PARA CRIAR PAGAMENTO PIX
+// 🔧 Criar pagamento PIX com produto vindo do Supabase
 app.post("/criar-pagamento", async (req, res) => {
   try {
-    const { nomeCliente, email, total } = req.body;
+    const { nomeCliente, email, produtoId } = req.body;
 
-    if (!nomeCliente || !email || !total) {
-      return res.status(400).json({ error: "Faltando dados obrigatórios" });
+    if (!nomeCliente || !email || !produtoId) {
+      return res.status(400).json({ error: "Dados obrigatórios ausentes" });
     }
 
-    // Converte string "R$ 10,00" em 10.00
-    let valorTotal = 0;
-    if (typeof total === "string") {
-      valorTotal = parseFloat(total.replace("R$", "").replace(/\./g, "").replace(",", "."));
-    } else if (typeof total === "number") {
-      valorTotal = total;
+    // 🔎 Buscar produto no Supabase
+    const { data: produto, error } = await supabase
+      .from("produtos")
+      .select("*")
+      .eq("id", produtoId)
+      .single();
+
+    if (error || !produto) {
+      return res.status(404).json({ error: "Produto não encontrado" });
     }
 
-    if (isNaN(valorTotal) || valorTotal <= 0) {
-      return res.status(400).json({ error: "Valor total inválido" });
-    }
-
-    console.log("🚀 Criando pagamento PIX para:", nomeCliente, "- Valor:", valorTotal);
+    console.log("🛍️ Criando pagamento para:", produto.nome, "- Valor:", produto.preco);
 
     const pagamento = await payment.create({
       body: {
-        transaction_amount: valorTotal,
-        description: "Compra de produtos digitais",
+        transaction_amount: produto.preco,
+        description: `Compra: ${produto.nome}`,
         payment_method_id: "pix",
         payer: {
-          email: "cliente@artfy.com", // 👈🏻 Evita envio automático
+          email: "cliente@artfy.com",
           first_name: nomeCliente,
         },
       }
@@ -75,34 +72,28 @@ app.post("/criar-pagamento", async (req, res) => {
 
     const txData = pagamento.point_of_interaction?.transaction_data || {};
 
-    // Armazena informações no "banco" local
     pagamentos[pagamento.id] = {
       status: pagamento.status,
-      email, // 👈🏻 Armazena o e-mail real aqui
+      email,
       nomeCliente,
       criadoEm: Date.now(),
-      link: "https://exemplo.com/downloads/arquivo.zip", // 🔁 Substitua pelo real
+      link: produto.link_download, // 👈 Link real do produto
     };
 
-    const response = {
+    res.json({
       id: pagamento.id,
       status: pagamento.status,
       qr_code: txData.qr_code || null,
       qr_code_base64: txData.qr_code_base64 || null,
       ticket_url: txData.ticket_url || null,
-    };
-
-    res.json(response);
-  } catch (error) {
-    console.error("❌ Erro ao criar pagamento Pix:", error);
-    res.status(500).json({
-      error: "Erro ao criar pagamento Pix",
-      detalhes: error.message || error.toString(),
     });
+  } catch (error) {
+    console.error("❌ Erro ao criar pagamento:", error);
+    res.status(500).json({ error: "Erro ao criar pagamento", detalhes: error.message });
   }
 });
 
-// 🔄 VERIFICA STATUS DE UM PAGAMENTO
+// 🔄 Verificar status de pagamento
 app.get("/status-pagamento/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -114,23 +105,21 @@ app.get("/status-pagamento/:id", async (req, res) => {
 
     const txData = pagamento.point_of_interaction?.transaction_data || {};
 
-    const response = {
+    res.json({
       id: pagamento.id,
       status: pagamento.status,
       qr_code: txData.qr_code || null,
       qr_code_base64: txData.qr_code_base64 || null,
       ticket_url: txData.ticket_url || null,
       link: pagamentos[id]?.link || null,
-    };
-
-    res.json(response);
+    });
   } catch (error) {
     console.error("❌ Erro ao consultar status:", error.message);
     res.status(500).json({ error: "Erro ao consultar pagamento" });
   }
 });
 
-// 🔓 ENTREGA LINK DE DOWNLOAD (com verificação)
+// 🔓 Link de download se pagamento aprovado
 app.get("/link-download/:id", (req, res) => {
   const { id } = req.params;
   const registro = pagamentos[id];
@@ -143,7 +132,7 @@ app.get("/link-download/:id", (req, res) => {
     return res.status(403).json({ erro: "Pagamento ainda não foi aprovado." });
   }
 
-  const expirado = Date.now() - registro.criadoEm > 10 * 60 * 1000; // 10 minutos
+  const expirado = Date.now() - registro.criadoEm > 10 * 60 * 1000;
   if (expirado) {
     return res.status(410).json({ erro: "Link expirado." });
   }
@@ -151,13 +140,13 @@ app.get("/link-download/:id", (req, res) => {
   return res.json({ link: registro.link });
 });
 
-// 🔔 WEBHOOK (opcional, não implementado ainda)
+// 🔔 Webhook (ainda não implementado)
 app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
   console.log("📩 Webhook recebido:", req.body);
   res.status(200).send("OK");
 });
 
-// 🔎 Consulta simplificada (backup)
+// 🔎 Consulta de backup
 app.get("/pagamento/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -178,7 +167,7 @@ app.get("/pagamento/:id", async (req, res) => {
   }
 });
 
-// 🚀 Inicia servidor
+// 🚀 Iniciar servidor
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
