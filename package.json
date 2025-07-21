@@ -1,13 +1,15 @@
 {
-  "name": "serve",
+  "name": "artfy-backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Backend para pagamentos via Mercado Pago com entrega automática via Supabase",
+  "main": "server.js",
   "scripts": {
+    "start": "node server.js",
+    "build": "npm install",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
-  "author": "",
+  "author": "Eduardo Araújo",
   "license": "ISC",
   "dependencies": {
     "@supabase/supabase-js": "^2.52.0",
