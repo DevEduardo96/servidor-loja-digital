@@ -2,19 +2,24 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { MercadoPagoConfig, Payment, Preference } from "mercadopago";
+import { createClient } from "@supabase/supabase-js";
 
 dotenv.config();
 
 const app = express();
+app.use(express.json());
 
-// Configuração CORS
-const allowedOrigins = ["https://artfy.netlify.app", "http://localhost:5173", "http://localhost:5174"];
+// CORS
+const allowedOrigins = [
+  "https://artfy.netlify.app",
+  "http://localhost:5173",
+  "http://localhost:5174",
+];
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) {
+      if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       } else {
         return callback(new Error("CORS origin não permitida"));
@@ -23,12 +28,13 @@ app.use(
   })
 );
 
-app.use(express.json());
+// Supabase
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
-// Simulando banco de dados em memória
-const pagamentos = {};
-
-// Inicializa Mercado Pago
+// Mercado Pago
 const mpClient = new MercadoPagoConfig({
   accessToken: process.env.MP_ACCESS_TOKEN,
 });
@@ -38,20 +44,18 @@ const preferenceClient = new Preference(mpClient);
 
 // Teste
 app.get("/", (req, res) => {
-  res.send("Backend rodando!");
+  res.send("✅ Backend rodando!");
 });
 
-// Criar pagamento Pix
+// Criar pagamento e salvar no Supabase
 app.post("/criar-pagamento", async (req, res) => {
   const { carrinho, nomeCliente, total, email } = req.body;
 
-  console.log("📦 Dados recebidos:", { total, nomeCliente, email });
+  console.log("📦 Criando pagamento:", { nomeCliente, total, email });
 
   let valorTotal = 0;
   if (typeof total === "string") {
-    valorTotal = parseFloat(
-      total.replace("R$", "").replace(/\./g, "").replace(",", ".")
-    );
+    valorTotal = parseFloat(total.replace("R$", "").replace(/\./g, "").replace(",", "."));
   } else if (typeof total === "number") {
     valorTotal = total;
   } else {
@@ -63,6 +67,7 @@ app.post("/criar-pagamento", async (req, res) => {
   }
 
   try {
+    // Criar pagamento no Mercado Pago
     const pagamento = await paymentClient.create({
       body: {
         transaction_amount: valorTotal,
@@ -76,15 +81,45 @@ app.post("/criar-pagamento", async (req, res) => {
     });
 
     const dados = pagamento.point_of_interaction.transaction_data;
+    const paymentId = pagamento.id.toString();
 
-    pagamentos[pagamento.id] = {
-      status: pagamento.status,
-      link: "https://exemplo.com/downloads/arquivo.zip",
-      criadoEm: Date.now(),
-    };
+    // 1. Inserir pedido
+    const { data: pedidoData, error: pedidoErro } = await supabase
+      .from("pedidos")
+      .insert([
+        {
+          payment_id: paymentId,
+          email,
+          valor_total: valorTotal,
+          status: pagamento.status,
+        },
+      ])
+      .select("id")
+      .single();
 
+    if (pedidoErro) {
+      console.error("Erro ao salvar pedido:", pedidoErro.message);
+      return res.status(500).json({ error: "Erro ao salvar pedido no Supabase" });
+    }
+
+    const pedidoId = pedidoData.id;
+
+    // 2. Inserir itens do carrinho
+    const itensParaInserir = carrinho.map((item) => ({
+      pedido_id: pedidoId,
+      produto_id: item.id,
+      quantidade: item.quantidade || 1,
+      preco_unitario: parseFloat(item.preco),
+    }));
+
+    const { error: itensErro } = await supabase.from("pedido_itens").insert(itensParaInserir);
+    if (itensErro) {
+      console.error("Erro ao salvar itens do pedido:", itensErro.message);
+    }
+
+    // 3. Retornar dados do QR code
     res.json({
-      id: pagamento.id,
+      id: paymentId,
       status: pagamento.status,
       qr_code_base64: dados.qr_code_base64,
       qr_code: dados.qr_code,
@@ -99,17 +134,12 @@ app.post("/criar-pagamento", async (req, res) => {
   }
 });
 
-// Status do pagamento
+// Consultar status de pagamento
 app.get("/status-pagamento/:id", async (req, res) => {
   const id = req.params.id;
 
   try {
     const pagamento = await paymentClient.get({ id });
-
-    if (pagamentos[id]) {
-      pagamentos[id].status = pagamento.status;
-    }
-
     res.json({ status: pagamento.status });
   } catch (error) {
     console.error("Erro ao consultar status:", error.message);
@@ -117,7 +147,7 @@ app.get("/status-pagamento/:id", async (req, res) => {
   }
 });
 
-// Preferência de pagamento
+// Criar preferência para checkout (ex: cartão)
 app.post("/criar-preferencia", async (req, res) => {
   try {
     const { itens } = req.body;
@@ -139,29 +169,6 @@ app.post("/criar-preferencia", async (req, res) => {
     console.error("Erro ao criar preferência:", error.message);
     res.status(500).json({ error: "Erro ao criar preferência" });
   }
-});
-
-// Link de download após pagamento aprovado
-app.get("/link-download/:id", (req, res) => {
-  const id = req.params.id;
-  const registro = pagamentos[id];
-
-  if (!registro) {
-    return res.status(404).json({ erro: "Pagamento não encontrado." });
-  }
-
-  if (registro.status !== "approved") {
-    return res.status(403).json({ erro: "Pagamento ainda não foi aprovado." });
-  }
-
-  const agora = Date.now();
-  const expirado = agora - registro.criadoEm > 10 * 60 * 1000;
-
-  if (expirado) {
-    return res.status(410).json({ erro: "Link expirado." });
-  }
-
-  return res.json({ link: registro.link });
 });
 
 const PORT = process.env.PORT || 3001;
