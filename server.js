@@ -1,34 +1,31 @@
-require("dotenv").config();
-const express = require("express");
-const cors = require("cors");
-const { MercadoPagoConfig, Payment, Preference } = require("mercadopago");
-const { createClient } = require("@supabase/supabase-js");
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import { MercadoPagoConfig, Payment, Preference } from "mercadopago";
+
+dotenv.config();
 
 const app = express();
 
-// ✅ Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-
 // Configuração CORS
-const allowedOrigins = [
-  "https://artfy.netlify.app",
-  "http://localhost:5173",
-];
+const allowedOrigins = ["https://artfy.netlify.app", "http://localhost:5173"];
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error("CORS origin não permitida"));
-  }
-}));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      } else {
+        return callback(new Error("CORS origin não permitida"));
+      }
+    },
+  })
+);
 
 app.use(express.json());
 
-// Simula um "banco de dados" em memória
+// Simulando banco de dados em memória
 const pagamentos = {};
 
 // Inicializa Mercado Pago
@@ -44,7 +41,7 @@ app.get("/", (req, res) => {
   res.send("Backend rodando!");
 });
 
-// ✅ Criar pagamento + salvar no Supabase
+// Criar pagamento Pix
 app.post("/criar-pagamento", async (req, res) => {
   const { carrinho, nomeCliente, total, email } = req.body;
 
@@ -86,20 +83,6 @@ app.post("/criar-pagamento", async (req, res) => {
       criadoEm: Date.now(),
     };
 
-    // ✅ Salvar no Supabase
-    const { error: supabaseError } = await supabase.from("orders").insert({
-      mercadopago_payment_id: pagamento.id.toString(),
-      status: pagamento.status,
-      qr_code: dados.qr_code,
-      qr_code_base64: dados.qr_code_base64,
-      customer_email: email,
-      total_amount: valorTotal,
-    });
-
-    if (supabaseError) {
-      console.error("Erro ao salvar no Supabase:", supabaseError);
-    }
-
     res.json({
       id: pagamento.id,
       status: pagamento.status,
@@ -116,7 +99,7 @@ app.post("/criar-pagamento", async (req, res) => {
   }
 });
 
-// Status
+// Status do pagamento
 app.get("/status-pagamento/:id", async (req, res) => {
   const id = req.params.id;
 
@@ -134,7 +117,7 @@ app.get("/status-pagamento/:id", async (req, res) => {
   }
 });
 
-// Checkout Pro
+// Preferência de pagamento
 app.post("/criar-preferencia", async (req, res) => {
   try {
     const { itens } = req.body;
@@ -158,7 +141,7 @@ app.post("/criar-preferencia", async (req, res) => {
   }
 });
 
-// Link de download simulado
+// Link de download após pagamento aprovado
 app.get("/link-download/:id", (req, res) => {
   const id = req.params.id;
   const registro = pagamentos[id];
@@ -173,6 +156,7 @@ app.get("/link-download/:id", (req, res) => {
 
   const agora = Date.now();
   const expirado = agora - registro.criadoEm > 10 * 60 * 1000;
+
   if (expirado) {
     return res.status(410).json({ erro: "Link expirado." });
   }
