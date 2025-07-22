@@ -8,7 +8,7 @@ dotenv.config();
 const app = express();
 
 // Configuração CORS
-const allowedOrigins = ["https://artfy.netlify.app", "http://localhost:5173"];
+const allowedOrigins = ["https://artfy.netlify.app", "http://localhost:5173", "http://localhost:5174"];
 
 app.use(
   cors({
