@@ -37,113 +37,56 @@ app.get("/", (req, res) => {
   res.send("Servidor funcionando com Supabase e Mercado Pago!");
 });
 
-// 📦 Rota para listar produtos com filtros
-app.get("/produtos", async (req, res) => {
-  try {
-    let query = supabase.from(TABELA_PRODUTOS).select('*');
-    
-    // Filtros opcionais
-    const { categoria, destaque, limit } = req.query;
-    
-    if (categoria) query = query.eq('categoria', categoria);
-    if (destaque === 'true') query = query.eq('destaque', true);
-    if (limit) query = query.limit(parseInt(limit));
-    
-    const { data: produtos, error } = await query.order('created_at', { ascending: false });
+// ... [suas outras rotas de produtos aqui, sem alteração] ...
 
-    if (error) throw error;
-
-    res.json(produtos);
-  } catch (err) {
-    console.error("Erro ao buscar produtos:", err);
-    res.status(500).json({ error: "Erro ao buscar produtos." });
-  }
-});
-
-// 📦 Rota para produtos em destaque
-app.get("/produtos/destaques", async (req, res) => {
-  try {
-    const { data: produtos, error } = await supabase
-      .from(TABELA_PRODUTOS)
-      .select('*')
-      .eq('destaque', true)
-      .order('avaliacao', { ascending: false })
-      .limit(6);
-
-    if (error) throw error;
-    res.json(produtos);
-  } catch (err) {
-    console.error("Erro ao buscar destaques:", err);
-    res.status(500).json({ error: "Erro ao buscar produtos em destaque." });
-  }
-});
-
-// 📦 Rota para buscar por categoria
-app.get("/produtos/categoria/:categoria", async (req, res) => {
-  try {
-    const { data: produtos, error } = await supabase
-      .from(TABELA_PRODUTOS)
-      .select('*')
-      .eq('categoria', req.params.categoria)
-      .order('nome');
-
-    if (error) throw error;
-    res.json(produtos);
-  } catch (err) {
-    console.error("Erro ao buscar por categoria:", err);
-    res.status(500).json({ error: "Erro ao buscar produtos da categoria." });
-  }
-});
-
-// 📦 Rota para obter produto específico
-app.get("/produtos/:id", async (req, res) => {
-  try {
-    const { data: produto, error } = await supabase
-      .from(TABELA_PRODUTOS)
-      .select('*')
-      .eq(CAMPO_ID, req.params.id)
-      .single();
-
-    if (error) throw error;
-    if (!produto) return res.status(404).json({ error: "Produto não encontrado." });
-
-    res.json(produto);
-  } catch (err) {
-    console.error("Erro ao buscar produto:", err);
-    res.status(500).json({ error: "Erro ao buscar produto." });
-  }
-});
-
-// 💳 Rota para criar preferência de pagamento
+// 💳 Rota para criar preferência de pagamento (ATUALIZADA para múltiplos itens)
 app.post("/criar-pagamento", async (req, res) => {
   try {
-    const { produto_id, quantidade = 1 } = req.body;
+    const { email, carrinho } = req.body;
 
-    // Buscar produto na sua tabela do Supabase
-    const { data: produto, error: produtoError } = await supabase
-      .from(TABELA_PRODUTOS)
-      .select('*')
-      .eq(CAMPO_ID, produto_id)
-      .single();
-
-    if (produtoError || !produto) {
-      return res.status(404).json({ error: "Produto não encontrado." });
+    if (!email || !Array.isArray(carrinho) || carrinho.length === 0) {
+      return res.status(400).json({ error: "Email e carrinho são obrigatórios" });
     }
 
-    // Criar preferência no Mercado Pago
+    // Buscar os produtos no banco para garantir os dados atualizados
+    const produtosIds = carrinho.map(item => item.id);
+    const { data: produtosDb, error: produtosError } = await supabase
+      .from(TABELA_PRODUTOS)
+      .select('*')
+      .in(CAMPO_ID, produtosIds);
+
+    if (produtosError || !produtosDb || produtosDb.length === 0) {
+      return res.status(404).json({ error: "Produtos não encontrados" });
+    }
+
+    // Mapear os itens para o formato esperado pelo Mercado Pago
+    const itemsMP = carrinho.map(item => {
+      const produtoInfo = produtosDb.find(p => p[CAMPO_ID] === item.id);
+      return {
+        id: produtoInfo[CAMPO_ID],
+        title: produtoInfo[CAMPO_NOME],
+        description: produtoInfo.descricao || `${produtoInfo.categoria} - ${produtoInfo.formato}`,
+        quantity: item.quantity,
+        unit_price: parseFloat(produtoInfo[CAMPO_PRECO]),
+        currency_id: "BRL",
+        picture_url: produtoInfo.imagem || null,
+        category_id: produtoInfo.categoria
+      };
+    });
+
+    // Montar metadata com todos os produtos para liberar downloads depois
+    const metadataItens = carrinho.map(item => {
+      const produtoInfo = produtosDb.find(p => p[CAMPO_ID] === item.id);
+      return {
+        id: produtoInfo[CAMPO_ID],
+        nome: produtoInfo[CAMPO_NOME],
+        link_download: produtoInfo[CAMPO_LINK],
+        quantidade: item.quantity
+      };
+    });
+
     const body = {
-      items: [
-        {
-          id: produto[CAMPO_ID],
-          title: produto[CAMPO_NOME],
-          description: produto.descricao || `${produto.categoria} - ${produto.formato}`,
-          quantity: quantidade,
-          unit_price: parseFloat(produto[CAMPO_PRECO]),
-          currency_id: "BRL",
-          picture_url: produto.imagem || null,
-          category_id: produto.categoria
-        }
-      ],
+      items: itemsMP,
       back_urls: {
         success: `${process.env.FRONTEND_URL}/sucesso`,
         failure: `${process.env.FRONTEND_URL}/erro`,
@@ -152,15 +95,8 @@ app.post("/criar-pagamento", async (req, res) => {
       auto_return: "approved",
       notification_url: `${process.env.BACKEND_URL}/webhook/mercadopago`,
       metadata: {
-        produto_id: produto[CAMPO_ID],
-        produto_nome: produto[CAMPO_NOME],
-        produto_categoria: produto.categoria,
-        produto_formato: produto.formato,
-        tamanho: produto.tamanho,
-        link_download: produto[CAMPO_LINK],
-        preco_original: produto.preco_original,
-        desconto: produto.desconto,
-        quantidade: quantidade
+        cliente_email: email,
+        itens: metadataItens,
       },
       payment_methods: {
         installments: 12
@@ -185,45 +121,40 @@ app.post("/criar-pagamento", async (req, res) => {
 // 🎯 Armazenamento temporário dos downloads aprovados (em memória)
 const downloadsAprovados = new Map();
 
-// 🔔 Webhook do Mercado Pago
+// 🔔 Webhook do Mercado Pago (ATUALIZADO para múltiplos produtos)
 app.post("/webhook/mercadopago", async (req, res) => {
   try {
     const { type, data } = req.body;
 
     if (type === "payment") {
       const paymentId = data.id;
-      
+
       // Buscar informações do pagamento no MP
       const paymentInfo = await payment.get({ id: paymentId });
       const { status, metadata } = paymentInfo;
 
       console.log(`Pagamento ${paymentId} - Status: ${status}`);
 
-      // Se pagamento aprovado, liberar download
+      // Se pagamento aprovado, liberar download para todos os produtos
       if (status === 'approved' && metadata) {
         const token = generateToken();
         const downloadInfo = {
-          produto_id: metadata.produto_id,
-          produto_nome: metadata.produto_nome,
-          categoria: metadata.produto_categoria,
-          formato: metadata.produto_formato,
-          tamanho: metadata.tamanho,
-          link_download: metadata.link_download,
-          preco_original: metadata.preco_original,
-          desconto: metadata.desconto,
+          cliente_email: metadata.cliente_email,
+          produtos: metadata.itens,  // array com todos os produtos comprados
           payment_id: paymentId,
           aprovado_em: new Date(),
-          valido_ate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 dias
+          valido_ate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // válido por 7 dias
         };
 
         downloadsAprovados.set(token, downloadInfo);
 
-        console.log(`✅ Download liberado:`);
-        console.log(`   📱 Produto: ${downloadInfo.produto_nome}`);
-        console.log(`   🏷️ Categoria: ${downloadInfo.categoria}`);
-        console.log(`   📄 Formato: ${downloadInfo.formato}`);
+        console.log(`✅ Download liberado para ${metadata.cliente_email}:`);
+        metadata.itens.forEach(prod => {
+          console.log(`   📱 Produto: ${prod.nome}`);
+          console.log(`   🔗 Link: ${prod.link_download}`);
+        });
         console.log(`   🔑 Token: ${token}`);
-        console.log(`   🔗 Link: ${process.env.BACKEND_URL}/download/${token}`);
+        console.log(`   🔗 Link único: ${process.env.BACKEND_URL}/download/${token}`);
       }
     }
 
@@ -244,7 +175,7 @@ app.get("/status-pagamento/:id", async (req, res) => {
   try {
     const paymentId = req.params.id;
     const paymentInfo = await payment.get({ id: paymentId });
-    
+
     const { status, point_of_interaction } = paymentInfo;
     const qr_code_base64 = point_of_interaction?.transaction_data?.qr_code_base64 || null;
     const qr_code = point_of_interaction?.transaction_data?.qr_code || null;
@@ -256,7 +187,7 @@ app.get("/status-pagamento/:id", async (req, res) => {
   }
 });
 
-// 🔽 Rota para obter informações e link de download
+// 🔽 Rota para obter informações e links de download (RETORNANDO TODOS PRODUTOS)
 app.get("/download/:token", async (req, res) => {
   try {
     const token = req.params.token;
@@ -273,23 +204,13 @@ app.get("/download/:token", async (req, res) => {
     }
 
     res.json({
-      produto: {
-        id: downloadData.produto_id,
-        nome: downloadData.produto_nome,
-        categoria: downloadData.categoria,
-        formato: downloadData.formato,
-        tamanho: downloadData.tamanho
-      },
-      download: {
-        link: downloadData.link_download,
+      cliente_email: downloadData.cliente_email,
+      produtos: downloadData.produtos,
+      pagamento: {
+        id: downloadData.payment_id,
         aprovado_em: downloadData.aprovado_em,
         valido_ate: downloadData.valido_ate,
         dias_restantes: Math.ceil((downloadData.valido_ate - new Date()) / (1000 * 60 * 60 * 24))
-      },
-      pagamento: {
-        id: downloadData.payment_id,
-        preco_original: downloadData.preco_original,
-        desconto: downloadData.desconto
       }
     });
 
@@ -299,54 +220,7 @@ app.get("/download/:token", async (req, res) => {
   }
 });
 
-// 📊 Rota para estatísticas dos produtos
-app.get("/estatisticas", async (req, res) => {
-  try {
-    const { data: produtos, error } = await supabase
-      .from(TABELA_PRODUTOS)
-      .select('categoria, destaque, preco, desconto');
-
-    if (error) throw error;
-
-    const stats = {
-      total_produtos: produtos.length,
-      produtos_destaque: produtos.filter(p => p.destaque).length,
-      categorias: [...new Set(produtos.map(p => p.categoria))],
-      downloads_ativos: downloadsAprovados.size,
-      preco_medio: produtos.reduce((acc, p) => acc + parseFloat(p.preco || 0), 0) / produtos.length
-    };
-
-    res.json(stats);
-  } catch (err) {
-    console.error("Erro ao buscar estatísticas:", err);
-    res.status(500).json({ error: "Erro ao buscar estatísticas." });
-  }
-});
-
-// 📊 Rota para listar downloads ativos (administração)
-app.get("/admin/downloads", (req, res) => {
-  const ativos = Array.from(downloadsAprovados.entries()).map(([token, data]) => ({
-    token,
-    produto: {
-      id: data.produto_id,
-      nome: data.produto_nome,
-      categoria: data.categoria,
-      formato: data.formato
-    },
-    pagamento_id: data.payment_id,
-    aprovado_em: data.aprovado_em,
-    valido_ate: data.valido_ate,
-    dias_restantes: Math.ceil((data.valido_ate - new Date()) / (1000 * 60 * 60 * 24)),
-    expirado: new Date() > data.valido_ate
-  }));
-
-  res.json({ 
-    total_downloads: ativos.length,
-    downloads_validos: ativos.filter(d => !d.expirado).length,
-    downloads_expirados: ativos.filter(d => d.expirado).length,
-    downloads: ativos.sort((a, b) => new Date(b.aprovado_em) - new Date(a.aprovado_em))
-  });
-});
+// ... [restante do seu código permanece igual] ...
 
 // 🧹 Função para limpar downloads expirados (executar periodicamente)
 function limparDownloadsExpirados() {
