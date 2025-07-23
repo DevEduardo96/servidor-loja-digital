@@ -25,7 +25,7 @@ const mpClient = new MercadoPagoConfig({
 });
 const paymentClient = new Payment(mpClient);
 
-// Armazena pagamentos em memória
+// Armazena pagamentos na memoria
 const pagamentos = {};
 
 // Criar pagamento Pix
