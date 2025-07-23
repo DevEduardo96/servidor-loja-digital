@@ -2,7 +2,7 @@
 import express from "express";
 import cors from "cors";
 import "dotenv/config";
-import { MercadoPagoConfig, Preference } from "mercadopago";
+import mercadopago from "mercadopago";
 import { createClient } from "@supabase/supabase-js";
 
 const app = express();
@@ -13,15 +13,16 @@ app.use(express.json());
 if (
   !process.env.MP_ACCESS_TOKEN ||
   !process.env.SUPABASE_URL ||
-  !process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  !process.env.SUPABASE_ANON_KEY
+  !process.env.SUPABASE_SERVICE_ROLE_KEY
 ) {
-  throw new Error("Variáveis de ambiente faltando.");
+  throw new Error(
+    "❌ SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY ou MP_ACCESS_TOKEN ausentes."
+  );
 }
 
-// Instância do Mercado Pago
-const mercadopago = new MercadoPagoConfig({
-  accessToken: process.env.MP_ACCESS_TOKEN,
+// Configura o Mercado Pago (SDK v2)
+mercadopago.configure({
+  access_token: process.env.MP_ACCESS_TOKEN,
 });
 
 // Instância do Supabase
@@ -35,39 +36,26 @@ app.post("/criar-pagamento", async (req, res) => {
   try {
     const { carrinho, nomeCliente, email, total } = req.body;
 
-    // Cria preferência
-    const preference = await mercadopago.preferences.create({
+    const pagamento = await mercadopago.payment.create({
       body: {
-        items: carrinho.map((item) => ({
-          title: item.product.name,
-          quantity: item.quantity,
-          unit_price: item.product.price,
-          currency_id: "BRL",
-        })),
+        transaction_amount: total,
+        payment_method_id: "pix",
+        description: "Compra de produtos digitais",
         payer: {
           email,
-          name: nomeCliente,
+          first_name: nomeCliente,
         },
-        payment_methods: {
-          excluded_payment_types: [{ id: "credit_card" }, { id: "ticket" }],
-          default_payment_method_id: "pix",
-        },
-        statement_descriptor: "Loja Artfix",
-        notification_url: "https://webhook.site/teste",
       },
     });
 
-    const paymentId = preference.id;
-    const initPoint = preference.init_point;
-    const qrCodeBase64 =
-      preference.point_of_interaction?.transaction_data?.qr_code_base64 || null;
+    const dados = pagamento.body;
 
     // Salva pedido no Supabase
     const { data: pedido, error } = await supabase
       .from("pedidos")
       .insert([
         {
-          payment_id: paymentId,
+          payment_id: dados.id.toString(),
           email,
           valor_total: total,
           status: "pendente",
@@ -82,9 +70,10 @@ app.post("/criar-pagamento", async (req, res) => {
     }
 
     res.json({
-      id: paymentId,
-      init_point: initPoint,
-      qr_code_base64: qrCodeBase64,
+      id: dados.id,
+      qr_code_base64:
+        dados.point_of_interaction.transaction_data.qr_code_base64,
+      qr_code: dados.point_of_interaction.transaction_data.qr_code,
       pedido_id: pedido.id,
     });
   } catch (err) {
@@ -96,5 +85,5 @@ app.post("/criar-pagamento", async (req, res) => {
 // Inicializa servidor
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
 });
