@@ -112,13 +112,15 @@ app.post("/criar-pagamento", async (req, res) => {
 
     // Salva pedido no Supabase
     const { data: pedido, error } = await supabase
-      .from("orders")
-      .insert({
-        mercadopago_payment_id: paymentId.toString(),
-        email,
-        valor_total: parseFloat(total),
-        status: "pendente",
-      })
+      .from("pedidos") // ✅ Nome correto da tabela
+      .insert([
+        {
+          payment_id: paymentId,
+          email,
+          valor_total: total,
+          status: "pendente",
+        },
+      ])
       .select()
       .single();
 
@@ -166,7 +168,7 @@ app.post("/webhook", async (req, res) => {
 
       // Atualiza status no Supabase
       const { error } = await supabase
-        .from("orders")
+        .from("pedidos") // ✅ CERTO — sua tabela correta
         .update({ status: pagamento.status })
         .eq("mercadopago_payment_id", paymentId.toString());
 
