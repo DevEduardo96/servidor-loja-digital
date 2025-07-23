@@ -2,7 +2,7 @@
 import express from "express";
 import cors from "cors";
 import "dotenv/config";
-import mercadopago from "mercadopago";
+import { MercadoPagoConfig, Payment } from "mercadopago";
 import { createClient } from "@supabase/supabase-js";
 
 const app = express();
@@ -18,10 +18,12 @@ if (
   throw new Error("❌ Variáveis de ambiente faltando.");
 }
 
-// Configura Mercado Pago
-mercadopago.configure({
-  access_token: process.env.MP_ACCESS_TOKEN,
+// Configura Mercado Pago (nova API)
+const client = new MercadoPagoConfig({
+  accessToken: process.env.MP_ACCESS_TOKEN,
 });
+
+const payment = new Payment(client);
 
 // Instância do Supabase
 const supabase = createClient(
@@ -34,8 +36,8 @@ app.post("/criar-pagamento", async (req, res) => {
   try {
     const { carrinho, nomeCliente, email, total } = req.body;
 
-    // Cria pagamento Pix diretamente (sem preferência)
-    const pagamento = await mercadopago.payment.create({
+    // Cria pagamento Pix com a nova API
+    const pagamento = await payment.create({
       body: {
         transaction_amount: parseFloat(total),
         description: "Compra de produtos digitais",
@@ -47,9 +49,9 @@ app.post("/criar-pagamento", async (req, res) => {
       },
     });
 
-    const dados = pagamento.response.point_of_interaction.transaction_data;
-    const paymentId = pagamento.response.id;
-    const status = pagamento.response.status;
+    const dados = pagamento.point_of_interaction.transaction_data;
+    const paymentId = pagamento.id;
+    const status = pagamento.status;
 
     // Salva pedido no Supabase
     const { data: pedido, error } = await supabase
@@ -81,6 +83,56 @@ app.post("/criar-pagamento", async (req, res) => {
   } catch (err) {
     console.error("❌ Erro ao criar pagamento:", err);
     res.status(500).json({ error: "Erro ao criar pagamento." });
+  }
+});
+
+// Webhook para receber notificações do Mercado Pago
+app.post("/webhook", async (req, res) => {
+  try {
+    const { type, data } = req.body;
+
+    if (type === "payment") {
+      const paymentId = data.id;
+
+      // Busca detalhes do pagamento
+      const pagamento = await payment.get({ id: paymentId });
+
+      // Atualiza status no Supabase
+      const { error } = await supabase
+        .from("pedidos")
+        .update({ status: pagamento.status })
+        .eq("payment_id", paymentId.toString());
+
+      if (error) {
+        console.error("❌ Erro ao atualizar pedido:", error);
+      } else {
+        console.log(
+          `✅ Pedido ${paymentId} atualizado para ${pagamento.status}`
+        );
+      }
+    }
+
+    res.status(200).send("OK");
+  } catch (err) {
+    console.error("❌ Erro no webhook:", err);
+    res.status(500).send("Erro no webhook");
+  }
+});
+
+// Rota para verificar status do pagamento
+app.get("/pagamento/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const pagamento = await payment.get({ id });
+
+    res.json({
+      id: pagamento.id,
+      status: pagamento.status,
+      status_detail: pagamento.status_detail,
+    });
+  } catch (err) {
+    console.error("❌ Erro ao buscar pagamento:", err);
+    res.status(500).json({ error: "Erro ao buscar pagamento." });
   }
 });
 
