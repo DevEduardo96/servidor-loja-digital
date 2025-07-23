@@ -2,7 +2,7 @@
 import express from "express";
 import cors from "cors";
 import "dotenv/config";
-import { MercadoPago } from "mercadopago";
+import mercadopago from "mercadopago";
 import { createClient } from "@supabase/supabase-js";
 
 const app = express();
@@ -15,13 +15,13 @@ if (
   !process.env.SUPABASE_URL ||
   !process.env.SUPABASE_SERVICE_ROLE_KEY
 ) {
-  throw new Error(
-    "❌ SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY ou MP_ACCESS_TOKEN ausentes."
-  );
+  throw new Error("❌ Variáveis de ambiente faltando.");
 }
 
-// Instância do Mercado Pago (v2 com import)
-const mercadopago = new MercadoPago(process.env.MP_ACCESS_TOKEN);
+// Configura Mercado Pago
+mercadopago.configure({
+  access_token: process.env.MP_ACCESS_TOKEN,
+});
 
 // Instância do Supabase
 const supabase = createClient(
@@ -34,11 +34,12 @@ app.post("/criar-pagamento", async (req, res) => {
   try {
     const { carrinho, nomeCliente, email, total } = req.body;
 
+    // Cria pagamento Pix diretamente (sem preferência)
     const pagamento = await mercadopago.payment.create({
       body: {
-        transaction_amount: total,
-        payment_method_id: "pix",
+        transaction_amount: parseFloat(total),
         description: "Compra de produtos digitais",
+        payment_method_id: "pix",
         payer: {
           email,
           first_name: nomeCliente,
@@ -46,14 +47,16 @@ app.post("/criar-pagamento", async (req, res) => {
       },
     });
 
-    const dados = pagamento.body;
+    const dados = pagamento.response.point_of_interaction.transaction_data;
+    const paymentId = pagamento.response.id;
+    const status = pagamento.response.status;
 
     // Salva pedido no Supabase
     const { data: pedido, error } = await supabase
       .from("pedidos")
       .insert([
         {
-          payment_id: dados.id.toString(),
+          payment_id: paymentId.toString(),
           email,
           valor_total: total,
           status: "pendente",
@@ -63,19 +66,20 @@ app.post("/criar-pagamento", async (req, res) => {
       .single();
 
     if (error) {
-      console.error("Erro ao salvar pedido:", error);
+      console.error("❌ Erro ao salvar pedido:", error);
       return res.status(500).json({ error: "Erro ao salvar pedido." });
     }
 
     res.json({
-      id: dados.id,
-      qr_code_base64:
-        dados.point_of_interaction.transaction_data.qr_code_base64,
-      qr_code: dados.point_of_interaction.transaction_data.qr_code,
+      id: paymentId,
+      status,
+      qr_code_base64: dados.qr_code_base64,
+      qr_code: dados.qr_code,
+      ticket_url: dados.ticket_url,
       pedido_id: pedido.id,
     });
   } catch (err) {
-    console.error("Erro ao criar pagamento:", err);
+    console.error("❌ Erro ao criar pagamento:", err);
     res.status(500).json({ error: "Erro ao criar pagamento." });
   }
 });
@@ -83,5 +87,5 @@ app.post("/criar-pagamento", async (req, res) => {
 // Inicializa servidor
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor rodando na porta ${PORT}`);
+  console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
 });
