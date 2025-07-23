@@ -2,7 +2,7 @@
 import express from "express";
 import cors from "cors";
 import "dotenv/config";
-import mercadopago from "mercadopago";
+import { MercadoPago } from "mercadopago";
 import { createClient } from "@supabase/supabase-js";
 
 const app = express();
@@ -20,10 +20,8 @@ if (
   );
 }
 
-// Configura o Mercado Pago (SDK v2)
-mercadopago.configure({
-  access_token: process.env.MP_ACCESS_TOKEN,
-});
+// Instância do Mercado Pago (v2 com import)
+const mercadopago = new MercadoPago(process.env.MP_ACCESS_TOKEN);
 
 // Instância do Supabase
 const supabase = createClient(

@@ -1,16 +1,23 @@
 {
   "name": "servidor-loja-digital",
   "version": "1.0.0",
-  "type": "module",
+  "description": "Servidor Express para pagamentos via Mercado Pago e Supabase",
   "main": "server.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.52.0",
+    "@supabase/supabase-js": "^2.39.4",
     "cors": "^2.8.5",
-    "dotenv": "^16.3.1",
-    "express": "^4.18.2",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
     "mercadopago": "^2.8.0"
-  }
+  },
+  "engines": {
+    "node": ">=18.x"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT"
 }
