@@ -55,9 +55,9 @@ app.post("/criar-pagamento", async (req, res) => {
 
     // Salva pedido no Supabase
     const { data: pedido, error } = await supabase
-      .from("pedidos")
+      .from("orders")
       .insert({
-        payment_id: paymentId.toString(),
+        mercadopago_payment_id: paymentId.toString(),
         email,
         valor_total: parseFloat(total),
         status: "pendente",
@@ -101,9 +101,9 @@ app.post("/webhook", async (req, res) => {
 
       // Atualiza status no Supabase
       const { error } = await supabase
-        .from("pedidos")
+        .from("orders")
         .update({ status: pagamento.status })
-        .eq("payment_id", paymentId.toString());
+        .eq("mercadopago_payment_id", paymentId.toString());
 
       if (error) {
         console.error("❌ Erro ao atualizar pedido:", error);
