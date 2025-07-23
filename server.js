@@ -1,211 +1,171 @@
-// server.js
-import express from "express";
-import cors from "cors";
-import "dotenv/config";
-import { MercadoPagoConfig, Payment } from "mercadopago";
-import { createClient } from "@supabase/supabase-js";
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const { MercadoPagoConfig, Payment, Preference } = require("mercadopago");
 
 const app = express();
-app.use(cors());
+
+// Configuração CORS com origem correta sem barra no final
+const allowedOrigins = [
+  "https://artfy.netlify.app",
+  "http://localhost:5173", // para desenvolvimento local, se quiser
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Permite requisições sem origin (ex: Postman)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    } else {
+      return callback(new Error("CORS origin não permitida"));
+    }
+  }
+}));
+
 app.use(express.json());
 
-// Verifica variáveis de ambiente
-console.log("🔍 Verificando variáveis de ambiente...");
-if (
-  !process.env.MP_ACCESS_TOKEN ||
-  !process.env.SUPABASE_URL ||
-  !process.env.SUPABASE_SERVICE_ROLE_KEY
-) {
-  console.error("❌ Variáveis de ambiente faltando:");
-  console.error("MP_ACCESS_TOKEN:", !!process.env.MP_ACCESS_TOKEN);
-  console.error("SUPABASE_URL:", !!process.env.SUPABASE_URL);
-  console.error(
-    "SUPABASE_SERVICE_ROLE_KEY:",
-    !!process.env.SUPABASE_SERVICE_ROLE_KEY
-  );
-  throw new Error("❌ Variáveis de ambiente faltando.");
-}
-console.log("✅ Todas as variáveis de ambiente estão configuradas");
+// Simula um "banco de dados" em memória
+const pagamentos = {};
 
-// Configura Mercado Pago (nova API)
-console.log("🔄 Configurando MercadoPago...");
-let payment;
-try {
-  const client = new MercadoPagoConfig({
-    accessToken: process.env.MP_ACCESS_TOKEN,
-  });
+// Inicializa o cliente Mercado Pago
+const mpClient = new MercadoPagoConfig({
+  accessToken: process.env.MP_ACCESS_TOKEN,
+});
 
-  payment = new Payment(client);
-  console.log("✅ MercadoPago configurado com sucesso");
-} catch (error) {
-  console.error("❌ Erro ao configurar MercadoPago:", error);
-  throw error;
-}
+const paymentClient = new Payment(mpClient);
+const preferenceClient = new Preference(mpClient);
 
-// Instância do Supabase
-console.log("🔄 Configurando Supabase...");
-let supabase;
-try {
-  supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY
-  );
-  console.log("✅ Supabase configurado com sucesso");
-} catch (error) {
-  console.error("❌ Erro ao configurar Supabase:", error);
-  throw error;
-}
+// Rota teste simples para verificar se backend está online
+app.get("/", (req, res) => {
+  res.send("Backend rodando!");
+});
 
-// Rota para criar pagamento Pix
+// Rota para gerar QR Code de pagamento Pix
 app.post("/criar-pagamento", async (req, res) => {
+  const { carrinho, nomeCliente, total, email } = req.body;
+
+  console.log("📦 Dados recebidos:", { total, nomeCliente, email });
+
+  let valorTotal = 0;
+  if (typeof total === "string") {
+    valorTotal = parseFloat(
+      total.replace("R$", "").replace(/\./g, "").replace(",", ".")
+    );
+  } else if (typeof total === "number") {
+    valorTotal = total;
+  } else {
+    return res.status(400).json({ error: "Formato de total inválido." });
+  }
+
+  if (isNaN(valorTotal) || valorTotal <= 0) {
+    return res.status(400).json({ error: "Valor total inválido." });
+  }
+
   try {
-    console.log("🔄 Iniciando criação de pagamento...");
-    const { carrinho, nomeCliente, email, total } = req.body;
-
-    console.log("📋 Dados recebidos:", {
-      carrinho: carrinho?.length,
-      nomeCliente,
-      email,
-      total,
-    });
-
-    // Validação básica
-    if (!email || !nomeCliente || !total) {
-      console.error("❌ Dados obrigatórios faltando");
-      return res.status(400).json({
-        error: "Email, nome e total são obrigatórios",
-      });
-    }
-
-    console.log("🔄 Criando pagamento no MercadoPago...");
-
-    // Cria pagamento Pix com a nova API
-    const pagamento = await payment.create({
+    const pagamento = await paymentClient.create({
       body: {
-        transaction_amount: parseFloat(total),
-        description: "Compra de produtos digitais",
+        transaction_amount: valorTotal,
         payment_method_id: "pix",
+        description: "Compra de produtos digitais",
         payer: {
-          email,
+          email: email || "comprador@email.com",
           first_name: nomeCliente,
         },
       },
     });
 
-    console.log("✅ Pagamento criado no MercadoPago:", {
-      id: pagamento.id,
+    const dados = pagamento.point_of_interaction.transaction_data;
+
+    // Armazena status inicial e link do produto associado ao pagamento
+    pagamentos[pagamento.id] = {
       status: pagamento.status,
-    });
-
-    const dados = pagamento.point_of_interaction?.transaction_data;
-    const paymentId = pagamento.id;
-    const status = pagamento.status;
-
-    if (!dados) {
-      console.error("❌ Dados do QR Code não encontrados na resposta do MP");
-      return res.status(500).json({
-        error: "Erro ao obter dados do QR Code",
-      });
-    }
-
-    console.log("🔄 Salvando pedido no Supabase...");
-
-    // Salva pedido no Supabase
-    const { data: pedido, error } = await supabase
-      .from("pedidos") // ✅ Nome correto da tabela
-      .insert([
-        {
-          payment_id: paymentId,
-          email,
-          valor_total: total,
-          status: "pendente",
-        },
-      ])
-      .select()
-      .single();
-
-    if (error) {
-      console.error("❌ Erro ao salvar pedido:", error);
-      console.error("❌ Detalhes:", JSON.stringify(error, null, 2));
-      return res.status(500).json({
-        error: "Erro ao salvar pedido.",
-        details: error.message,
-      });
-    }
-
-    console.log("✅ Pedido salvo no Supabase:", pedido.id);
+      link: "https://exemplo.com/downloads/arquivo.zip", // Substitua pelo link real
+      criadoEm: Date.now(),
+    };
 
     res.json({
-      id: paymentId,
-      status,
+      id: pagamento.id,
+      status: pagamento.status,
       qr_code_base64: dados.qr_code_base64,
       qr_code: dados.qr_code,
       ticket_url: dados.ticket_url,
-      pedido_id: pedido.id,
     });
-
-    console.log("✅ Resposta enviada com sucesso");
-  } catch (err) {
-    console.error("❌ Erro geral:", err);
-    console.error("❌ Stack trace:", err.stack);
+  } catch (error) {
+    console.error("❌ Erro ao gerar pagamento Pix:", error.message);
     res.status(500).json({
-      error: "Erro ao criar pagamento.",
-      message: err.message,
+      error: "Erro ao gerar pagamento Pix",
+      detalhes: error.message,
     });
   }
 });
 
-// Webhook para receber notificações do Mercado Pago
-app.post("/webhook", async (req, res) => {
+// Consulta status do pagamento Pix
+app.get("/status-pagamento/:id", async (req, res) => {
+  const id = req.params.id;
+
   try {
-    const { type, data } = req.body;
+    const pagamento = await paymentClient.get({ id });
 
-    if (type === "payment") {
-      const paymentId = data.id;
-
-      // Busca detalhes do pagamento
-      const pagamento = await payment.get({ id: paymentId });
-
-      // Atualiza status no Supabase
-      const { error } = await supabase
-        .from("pedidos") // ✅ CERTO — sua tabela correta
-        .update({ status: pagamento.status })
-        .eq("mercadopago_payment_id", paymentId.toString());
-
-      if (error) {
-        console.error("❌ Erro ao atualizar pedido:", error);
-      } else {
-        console.log(
-          `✅ Pedido ${paymentId} atualizado para ${pagamento.status}`
-        );
-      }
+    if (pagamentos[id]) {
+      pagamentos[id].status = pagamento.status;
     }
 
-    res.status(200).send("OK");
-  } catch (err) {
-    console.error("❌ Erro no webhook:", err);
-    res.status(500).send("Erro no webhook");
+    res.json({ status: pagamento.status });
+  } catch (error) {
+    console.error("Erro ao consultar status:", error.message);
+    res.status(500).json({ error: "Erro ao consultar pagamento" });
   }
 });
 
-// Rota para verificar status do pagamento
-app.get("/pagamento/:id", async (req, res) => {
+// Rota para gerar preferência de pagamento (Checkout Pro)
+app.post("/criar-preferencia", async (req, res) => {
   try {
-    const { id } = req.params;
-    const pagamento = await payment.get({ id });
+    const { itens } = req.body;
 
-    res.json({
-      id: pagamento.id,
-      status: pagamento.status,
-      status_detail: pagamento.status_detail,
+    const resposta = await preferenceClient.create({
+      body: {
+        items: itens,
+        back_urls: {
+          success: "https://artfy.netlify.app/sucesso",
+          failure: "https://artfy.netlify.app/erro",
+          pending: "https://artfy.netlify.app/pendente",
+        },
+        auto_return: "approved",
+      },
     });
-  } catch (err) {
-    console.error("❌ Erro ao buscar pagamento:", err);
-    res.status(500).json({ error: "Erro ao buscar pagamento." });
+
+    res.json({ init_point: resposta.init_point });
+  } catch (error) {
+    console.error("Erro ao criar preferência:", error.message);
+    res.status(500).json({ error: "Erro ao criar preferência" });
   }
 });
 
-// Inicializa servidor
+// Rota protegida para fornecer link de download após pagamento aprovado
+app.get("/link-download/:id", (req, res) => {
+  const id = req.params.id;
+
+  const registro = pagamentos[id];
+
+  if (!registro) {
+    return res.status(404).json({ erro: "Pagamento não encontrado." });
+  }
+
+  if (registro.status !== "approved") {
+    return res.status(403).json({ erro: "Pagamento ainda não foi aprovado." });
+  }
+
+  const agora = Date.now();
+  const expirado = agora - registro.criadoEm > 10 * 60 * 1000;
+  if (expirado) {
+    return res.status(410).json({ erro: "Link expirado." });
+  }
+
+  return res.json({ link: registro.link });
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
