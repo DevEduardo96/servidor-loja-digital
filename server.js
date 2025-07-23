@@ -56,20 +56,22 @@ app.post("/criar-pagamento", async (req, res) => {
     // Salva pedido no Supabase
     const { data: pedido, error } = await supabase
       .from("pedidos")
-      .insert([
-        {
-          payment_id: paymentId.toString(),
-          email,
-          valor_total: total,
-          status: "pendente",
-        },
-      ])
+      .insert({
+        payment_id: paymentId.toString(),
+        email,
+        valor_total: parseFloat(total),
+        status: "pendente",
+      })
       .select()
       .single();
 
     if (error) {
       console.error("❌ Erro ao salvar pedido:", error);
-      return res.status(500).json({ error: "Erro ao salvar pedido." });
+      console.error("❌ Detalhes:", JSON.stringify(error, null, 2));
+      return res.status(500).json({
+        error: "Erro ao salvar pedido.",
+        details: error.message,
+      });
     }
 
     res.json({
