@@ -29,12 +29,13 @@ console.log("✅ Todas as variáveis de ambiente estão configuradas");
 
 // Configura Mercado Pago (nova API)
 console.log("🔄 Configurando MercadoPago...");
+let payment;
 try {
   const client = new MercadoPagoConfig({
     accessToken: process.env.MP_ACCESS_TOKEN,
   });
 
-  const payment = new Payment(client);
+  payment = new Payment(client);
   console.log("✅ MercadoPago configurado com sucesso");
 } catch (error) {
   console.error("❌ Erro ao configurar MercadoPago:", error);
@@ -43,8 +44,9 @@ try {
 
 // Instância do Supabase
 console.log("🔄 Configurando Supabase...");
+let supabase;
 try {
-  const supabase = createClient(
+  supabase = createClient(
     process.env.SUPABASE_URL,
     process.env.SUPABASE_SERVICE_ROLE_KEY
   );
