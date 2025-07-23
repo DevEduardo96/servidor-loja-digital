@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { MercadoPagoConfig, Payment } = require("mercadopago");
-const produtos = require("./Produtos");
+const { produtos } = require("./Produtos");
 
 const app = express();
 app.use(cors());
