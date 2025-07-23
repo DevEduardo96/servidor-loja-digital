@@ -3,7 +3,7 @@ const produtos = [
   {
     id: "2511ce44-fa75-4ce2-8ce8-d0590e7cb394",
     nome: "Curso Completo de React.js",
-    preco: 0.2,
+    preco: 0.1,
     linkDownload: "https://seusite.com/downloads/react-curso.zip",
   },
   {
