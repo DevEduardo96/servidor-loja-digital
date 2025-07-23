@@ -10,31 +10,72 @@ app.use(cors());
 app.use(express.json());
 
 // Verifica variáveis de ambiente
+console.log("🔍 Verificando variáveis de ambiente...");
 if (
   !process.env.MP_ACCESS_TOKEN ||
   !process.env.SUPABASE_URL ||
   !process.env.SUPABASE_SERVICE_ROLE_KEY
 ) {
+  console.error("❌ Variáveis de ambiente faltando:");
+  console.error("MP_ACCESS_TOKEN:", !!process.env.MP_ACCESS_TOKEN);
+  console.error("SUPABASE_URL:", !!process.env.SUPABASE_URL);
+  console.error(
+    "SUPABASE_SERVICE_ROLE_KEY:",
+    !!process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
   throw new Error("❌ Variáveis de ambiente faltando.");
 }
+console.log("✅ Todas as variáveis de ambiente estão configuradas");
 
 // Configura Mercado Pago (nova API)
-const client = new MercadoPagoConfig({
-  accessToken: process.env.MP_ACCESS_TOKEN,
-});
+console.log("🔄 Configurando MercadoPago...");
+try {
+  const client = new MercadoPagoConfig({
+    accessToken: process.env.MP_ACCESS_TOKEN,
+  });
 
-const payment = new Payment(client);
+  const payment = new Payment(client);
+  console.log("✅ MercadoPago configurado com sucesso");
+} catch (error) {
+  console.error("❌ Erro ao configurar MercadoPago:", error);
+  throw error;
+}
 
 // Instância do Supabase
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+console.log("🔄 Configurando Supabase...");
+try {
+  const supabase = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
+  console.log("✅ Supabase configurado com sucesso");
+} catch (error) {
+  console.error("❌ Erro ao configurar Supabase:", error);
+  throw error;
+}
 
 // Rota para criar pagamento Pix
 app.post("/criar-pagamento", async (req, res) => {
   try {
+    console.log("🔄 Iniciando criação de pagamento...");
     const { carrinho, nomeCliente, email, total } = req.body;
+
+    console.log("📋 Dados recebidos:", {
+      carrinho: carrinho?.length,
+      nomeCliente,
+      email,
+      total,
+    });
+
+    // Validação básica
+    if (!email || !nomeCliente || !total) {
+      console.error("❌ Dados obrigatórios faltando");
+      return res.status(400).json({
+        error: "Email, nome e total são obrigatórios",
+      });
+    }
+
+    console.log("🔄 Criando pagamento no MercadoPago...");
 
     // Cria pagamento Pix com a nova API
     const pagamento = await payment.create({
@@ -49,9 +90,23 @@ app.post("/criar-pagamento", async (req, res) => {
       },
     });
 
-    const dados = pagamento.point_of_interaction.transaction_data;
+    console.log("✅ Pagamento criado no MercadoPago:", {
+      id: pagamento.id,
+      status: pagamento.status,
+    });
+
+    const dados = pagamento.point_of_interaction?.transaction_data;
     const paymentId = pagamento.id;
     const status = pagamento.status;
+
+    if (!dados) {
+      console.error("❌ Dados do QR Code não encontrados na resposta do MP");
+      return res.status(500).json({
+        error: "Erro ao obter dados do QR Code",
+      });
+    }
+
+    console.log("🔄 Salvando pedido no Supabase...");
 
     // Salva pedido no Supabase
     const { data: pedido, error } = await supabase
@@ -74,6 +129,8 @@ app.post("/criar-pagamento", async (req, res) => {
       });
     }
 
+    console.log("✅ Pedido salvo no Supabase:", pedido.id);
+
     res.json({
       id: paymentId,
       status,
@@ -82,9 +139,15 @@ app.post("/criar-pagamento", async (req, res) => {
       ticket_url: dados.ticket_url,
       pedido_id: pedido.id,
     });
+
+    console.log("✅ Resposta enviada com sucesso");
   } catch (err) {
-    console.error("❌ Erro ao criar pagamento:", err);
-    res.status(500).json({ error: "Erro ao criar pagamento." });
+    console.error("❌ Erro geral:", err);
+    console.error("❌ Stack trace:", err.stack);
+    res.status(500).json({
+      error: "Erro ao criar pagamento.",
+      message: err.message,
+    });
   }
 });
 
