@@ -67,10 +67,26 @@ app.post("/criar-pagamento", async (req, res) => {
       })
       .filter(Boolean);
 
+    // Salva dados completos do pagamento
     pagamentos[pagamento.id] = {
       status: pagamento.status,
       links,
       criadoEm: Date.now(),
+      // Dados adicionais que o frontend precisa
+      paymentId: pagamento.id,
+      customerEmail: email || "comprador@email.com",
+      total: valorTotal * 100, // Frontend espera em centavos
+      products: carrinho.map((item) => {
+        const p = produtos.find((prod) => prod.id === item.id);
+        return {
+          id: item.id,
+          name: p ? p.nome : "Produto não encontrado",
+          downloadUrl: p ? p.linkDownload : null,
+          format: "Digital",
+          fileSize: "N/A",
+        };
+      }),
+      createdAt: new Date().toISOString(),
     };
 
     console.log(
@@ -141,15 +157,27 @@ app.get("/status-pagamento/:id", async (req, res) => {
         }
       }
 
+      // Retorna todos os dados que o frontend espera
+      const registro = pagamentos[id];
       res.json({
-        status: pagamentos[id].status,
-        temLinks: pagamentos[id].links && pagamentos[id].links.length > 0,
+        status: registro.status,
+        paymentId: registro.paymentId,
+        products: registro.products,
+        customerEmail: registro.customerEmail,
+        total: registro.total,
+        createdAt: registro.createdAt,
+        temLinks: registro.links && registro.links.length > 0,
       });
     } else {
       // Se não tem na memória, consulta a API
       const pagamento = await paymentClient.get({ id });
       res.json({
         status: pagamento.status,
+        paymentId: id,
+        products: [],
+        customerEmail: "N/A",
+        total: 0,
+        createdAt: new Date().toISOString(),
         temLinks: false,
       });
     }
