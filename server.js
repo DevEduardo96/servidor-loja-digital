@@ -5,11 +5,10 @@ const { MercadoPagoConfig, Payment } = require("mercadopago");
 const { produtos } = require("./Produtos");
 
 const app = express();
-app.use(cors());
 app.use(express.json());
 
+// CORS configurado apenas uma vez
 const allowedOrigins = ["https://artfy.netlify.app", "http://localhost:5173"];
-
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -51,6 +50,10 @@ app.post("/criar-pagamento", async (req, res) => {
           email: email || "comprador@email.com",
           first_name: nomeCliente,
         },
+        // Adiciona URL de notificação (webhook)
+        notification_url: `${
+          process.env.BASE_URL || "https://seu-servidor.render.com"
+        }/webhook`,
       },
     });
 
@@ -70,6 +73,10 @@ app.post("/criar-pagamento", async (req, res) => {
       criadoEm: Date.now(),
     };
 
+    console.log(
+      `Pagamento criado: ${pagamento.id}, Status: ${pagamento.status}`
+    );
+
     res.json({
       id: pagamento.id,
       status: pagamento.status,
@@ -78,10 +85,37 @@ app.post("/criar-pagamento", async (req, res) => {
       ticket_url: dados.ticket_url,
     });
   } catch (error) {
-    console.error("Erro ao criar pagamento:", error.message);
+    console.error("Erro ao criar pagamento:", error);
     res
       .status(500)
       .json({ error: "Erro ao criar pagamento", detalhes: error.message });
+  }
+});
+
+// Webhook para receber notificações do Mercado Pago
+app.post("/webhook", async (req, res) => {
+  try {
+    console.log("Webhook recebido:", req.body);
+
+    const { data, type } = req.body;
+
+    if (type === "payment") {
+      const paymentId = data.id;
+      console.log(`Consultando pagamento: ${paymentId}`);
+
+      // Consulta o pagamento para obter o status atualizado
+      const pagamento = await paymentClient.get({ id: paymentId });
+
+      if (pagamentos[paymentId]) {
+        pagamentos[paymentId].status = pagamento.status;
+        console.log(`Status atualizado para ${paymentId}: ${pagamento.status}`);
+      }
+    }
+
+    res.status(200).send("OK");
+  } catch (error) {
+    console.error("Erro no webhook:", error);
+    res.status(500).send("Erro");
   }
 });
 
@@ -89,12 +123,42 @@ app.post("/criar-pagamento", async (req, res) => {
 app.get("/status-pagamento/:id", async (req, res) => {
   const id = req.params.id;
   try {
-    const pagamento = await paymentClient.get({ id });
-    if (pagamentos[id]) pagamentos[id].status = pagamento.status;
-    res.json({ status: pagamento.status });
+    console.log(`Consultando status do pagamento: ${id}`);
+
+    // Primeiro verifica se tem na memória
+    if (pagamentos[id]) {
+      console.log(`Status na memória: ${pagamentos[id].status}`);
+
+      // Se ainda está pending, consulta a API do MP para ter certeza
+      if (pagamentos[id].status === "pending") {
+        try {
+          const pagamento = await paymentClient.get({ id });
+          pagamentos[id].status = pagamento.status;
+          console.log(`Status atualizado da API: ${pagamento.status}`);
+        } catch (apiError) {
+          console.error("Erro ao consultar API do MP:", apiError.message);
+          // Continua com o status da memória se a API falhar
+        }
+      }
+
+      res.json({
+        status: pagamentos[id].status,
+        temLinks: pagamentos[id].links && pagamentos[id].links.length > 0,
+      });
+    } else {
+      // Se não tem na memória, consulta a API
+      const pagamento = await paymentClient.get({ id });
+      res.json({
+        status: pagamento.status,
+        temLinks: false,
+      });
+    }
   } catch (error) {
     console.error("Erro ao consultar pagamento:", error.message);
-    res.status(500).json({ error: "Erro ao consultar pagamento" });
+    res.status(500).json({
+      error: "Erro ao consultar pagamento",
+      detalhes: error.message,
+    });
   }
 });
 
@@ -102,18 +166,41 @@ app.get("/status-pagamento/:id", async (req, res) => {
 app.get("/link-download/:id", (req, res) => {
   const id = req.params.id;
   const registro = pagamentos[id];
-  if (!registro)
+
+  console.log(`Solicitação de download para: ${id}`);
+  console.log(`Registro encontrado:`, registro);
+
+  if (!registro) {
     return res.status(404).json({ erro: "Pagamento não encontrado." });
-  if (registro.status !== "approved")
-    return res.status(403).json({ erro: "Pagamento não aprovado." });
+  }
+
+  if (registro.status !== "approved") {
+    return res.status(403).json({
+      erro: "Pagamento não aprovado.",
+      status: registro.status,
+    });
+  }
 
   // Opcional: expira o link após 10 minutos
   if (Date.now() - registro.criadoEm > 10 * 60 * 1000) {
     return res.status(410).json({ erro: "Link expirado." });
   }
 
+  console.log(`Links liberados para: ${id}`);
   return res.json({ links: registro.links });
 });
 
+// Endpoint para debug (remover em produção)
+app.get("/debug/pagamentos", (req, res) => {
+  res.json(pagamentos);
+});
+
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Servidor rodando na porta ${PORT}`);
+  console.log(
+    `Webhook URL: ${
+      process.env.BASE_URL || "https://seu-servidor.render.com"
+    }/webhook`
+  );
+});
