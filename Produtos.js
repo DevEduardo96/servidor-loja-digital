@@ -4,7 +4,8 @@ const produtos = [
     id: "2511ce44-fa75-4ce2-8ce8-d0590e7cb394",
     nome: "Curso Completo de React.js",
     preco: 0.1,
-    linkDownload: "https://seusite.com/downloads/react-curso.zip",
+    linkDownload:
+      "https://www.mediafire.com/file/exhl83mwtoz65kp/Invenc%25C3%25ADvel_%2528Invincible%2529_-_%25230001.cbr/file",
   },
   {
     id: "3d1ef734-5b8d-48be-b770-d1db7a6d302a",
