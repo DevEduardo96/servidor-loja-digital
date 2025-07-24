@@ -31,6 +31,8 @@ const pagamentos = {};
 app.post("/criar-pagamento", async (req, res) => {
   const { carrinho, nomeCliente, email, total } = req.body;
 
+  console.log("📦 Dados recebidos:", { carrinho, nomeCliente, email, total });
+
   let valorTotal =
     typeof total === "string"
       ? parseFloat(total.replace("R$", "").replace(/\./g, "").replace(",", "."))
@@ -59,33 +61,66 @@ app.post("/criar-pagamento", async (req, res) => {
 
     const dados = pagamento.point_of_interaction.transaction_data;
 
-    // Busca links dos produtos no carrinho
-    const links = carrinho
-      .map((item) => {
-        const p = produtos.find((prod) => prod.id === item.id);
-        return p ? p.linkDownload : null;
-      })
-      .filter(Boolean);
+    // 🔍 Debug: Log dos produtos e carrinho
+    console.log("🛒 Carrinho recebido:", JSON.stringify(carrinho, null, 2));
+    console.log(
+      "📦 Produtos disponíveis:",
+      produtos.map((p) => ({ id: p.id, nome: p.nome }))
+    );
+
+    // Busca links dos produtos no carrinho - VERSÃO MAIS ROBUSTA
+    const links = [];
+    const produtosEncontrados = [];
+
+    if (Array.isArray(carrinho)) {
+      carrinho.forEach((item, index) => {
+        console.log(`🔍 Procurando produto ${index}:`, item);
+
+        // Tenta diferentes formas de acessar o ID
+        const itemId = item.id || item.productId || item.produto_id || item;
+        console.log(`🔑 ID extraído:`, itemId);
+
+        const produto = produtos.find((prod) => prod.id === itemId);
+        console.log(
+          `✅ Produto encontrado:`,
+          produto ? produto.nome : "NÃO ENCONTRADO"
+        );
+
+        if (produto) {
+          links.push(produto.linkDownload);
+          produtosEncontrados.push({
+            id: produto.id,
+            name: produto.nome,
+            downloadUrl: produto.linkDownload,
+            format: "Digital",
+            fileSize: "N/A",
+          });
+        } else {
+          console.log(`❌ Produto não encontrado para ID: ${itemId}`);
+          produtosEncontrados.push({
+            id: itemId,
+            name: `Produto não encontrado (ID: ${itemId})`,
+            downloadUrl: null,
+            format: "Digital",
+            fileSize: "N/A",
+          });
+        }
+      });
+    }
+
+    console.log(`🔗 Links encontrados:`, links);
+    console.log(`📦 Produtos processados:`, produtosEncontrados);
 
     // Salva dados completos do pagamento
     pagamentos[pagamento.id] = {
       status: pagamento.status,
-      links,
+      links: links,
       criadoEm: Date.now(),
       // Dados adicionais que o frontend precisa
       paymentId: pagamento.id,
       customerEmail: email || "comprador@email.com",
       total: valorTotal * 100, // Frontend espera em centavos
-      products: carrinho.map((item) => {
-        const p = produtos.find((prod) => prod.id === item.id);
-        return {
-          id: item.id,
-          name: p ? p.nome : "Produto não encontrado",
-          downloadUrl: p ? p.linkDownload : null,
-          format: "Digital",
-          fileSize: "N/A",
-        };
-      }),
+      products: produtosEncontrados,
       createdAt: new Date().toISOString(),
       // Dados do carrinho original para referência
       carrinhoOriginal: carrinho,
@@ -93,6 +128,10 @@ app.post("/criar-pagamento", async (req, res) => {
 
     console.log(
       `Pagamento criado: ${pagamento.id}, Status: ${pagamento.status}`
+    );
+    console.log(
+      `💾 Dados salvos:`,
+      JSON.stringify(pagamentos[pagamento.id], null, 2)
     );
 
     res.json({
