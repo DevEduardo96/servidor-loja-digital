@@ -74,11 +74,30 @@ app.post("/criar-pagamento", async (req, res) => {
 
     if (Array.isArray(carrinho)) {
       carrinho.forEach((item, index) => {
-        console.log(`🔍 Procurando produto ${index}:`, item);
+        console.log(
+          `🔍 Procurando produto ${index}:`,
+          JSON.stringify(item, null, 2)
+        );
 
         // Tenta diferentes formas de acessar o ID
-        const itemId = item.id || item.productId || item.produto_id || item;
-        console.log(`🔑 ID extraído:`, itemId);
+        let itemId = null;
+        let itemName = null;
+
+        if (item.product && item.product.id) {
+          // Estrutura: { product: { id: "...", name: "..." }, quantity: 1 }
+          itemId = item.product.id;
+          itemName = item.product.name;
+        } else if (item.id) {
+          // Estrutura: { id: "...", name: "..." }
+          itemId = item.id;
+          itemName = item.name;
+        } else if (typeof item === "string") {
+          // Estrutura: ["id1", "id2"]
+          itemId = item;
+        }
+
+        console.log(`🔑 ID extraído: ${itemId}`);
+        console.log(`📝 Nome do frontend: ${itemName}`);
 
         const produto = produtos.find((prod) => prod.id === itemId);
         console.log(
@@ -90,7 +109,7 @@ app.post("/criar-pagamento", async (req, res) => {
           links.push(produto.linkDownload);
           produtosEncontrados.push({
             id: produto.id,
-            name: produto.nome,
+            name: produto.nome, // Nome do backend
             downloadUrl: produto.linkDownload,
             format: "Digital",
             fileSize: "N/A",
@@ -99,7 +118,7 @@ app.post("/criar-pagamento", async (req, res) => {
           console.log(`❌ Produto não encontrado para ID: ${itemId}`);
           produtosEncontrados.push({
             id: itemId,
-            name: `Produto não encontrado (ID: ${itemId})`,
+            name: itemName || `Produto não encontrado (ID: ${itemId})`,
             downloadUrl: null,
             format: "Digital",
             fileSize: "N/A",
