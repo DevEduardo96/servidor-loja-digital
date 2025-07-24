@@ -159,7 +159,7 @@ app.get("/status-pagamento/:id", async (req, res) => {
 
       // Retorna todos os dados que o frontend espera
       const registro = pagamentos[id];
-      res.json({
+      const responseData = {
         status: registro.status,
         paymentId: registro.paymentId,
         products: registro.products,
@@ -167,11 +167,18 @@ app.get("/status-pagamento/:id", async (req, res) => {
         total: registro.total,
         createdAt: registro.createdAt,
         temLinks: registro.links && registro.links.length > 0,
-      });
+      };
+
+      console.log(
+        `📤 Enviando resposta para frontend:`,
+        JSON.stringify(responseData, null, 2)
+      );
+      res.json(responseData);
     } else {
+      console.log(`❌ Pagamento ${id} não encontrado na memória`);
       // Se não tem na memória, consulta a API
       const pagamento = await paymentClient.get({ id });
-      res.json({
+      const responseData = {
         status: pagamento.status,
         paymentId: id,
         products: [],
@@ -179,7 +186,13 @@ app.get("/status-pagamento/:id", async (req, res) => {
         total: 0,
         createdAt: new Date().toISOString(),
         temLinks: false,
-      });
+      };
+
+      console.log(
+        `📤 Enviando resposta da API para frontend:`,
+        JSON.stringify(responseData, null, 2)
+      );
+      res.json(responseData);
     }
   } catch (error) {
     console.error("Erro ao consultar pagamento:", error.message);
@@ -196,7 +209,7 @@ app.get("/link-download/:id", (req, res) => {
   const registro = pagamentos[id];
 
   console.log(`Solicitação de download para: ${id}`);
-  console.log(`Registro encontrado:`, registro);
+  console.log(`Registro encontrado:`, JSON.stringify(registro, null, 2));
 
   if (!registro) {
     return res.status(404).json({ erro: "Pagamento não encontrado." });
@@ -214,13 +227,36 @@ app.get("/link-download/:id", (req, res) => {
     return res.status(410).json({ erro: "Link expirado." });
   }
 
-  console.log(`Links liberados para: ${id}`);
-  return res.json({ links: registro.links });
+  console.log(`Links liberados para: ${id}`, registro.links);
+  return res.json({
+    links: registro.links,
+    // Debug info
+    debug: {
+      totalLinks: registro.links.length,
+      produtos: registro.products.length,
+      status: registro.status,
+    },
+  });
 });
 
 // Endpoint para debug (remover em produção)
 app.get("/debug/pagamentos", (req, res) => {
-  res.json(pagamentos);
+  console.log("📊 Pagamentos na memória:", JSON.stringify(pagamentos, null, 2));
+  res.json({
+    totalPagamentos: Object.keys(pagamentos).length,
+    pagamentos: pagamentos,
+  });
+});
+
+// Endpoint para debug específico
+app.get("/debug/pagamento/:id", (req, res) => {
+  const id = req.params.id;
+  const registro = pagamentos[id];
+  console.log(`🔍 Debug pagamento ${id}:`, JSON.stringify(registro, null, 2));
+  res.json({
+    encontrado: !!registro,
+    dados: registro || null,
+  });
 });
 
 const PORT = process.env.PORT || 3001;
