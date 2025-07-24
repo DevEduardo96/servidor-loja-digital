@@ -87,6 +87,8 @@ app.post("/criar-pagamento", async (req, res) => {
         };
       }),
       createdAt: new Date().toISOString(),
+      // Dados do carrinho original para referência
+      carrinhoOriginal: carrinho,
     };
 
     console.log(
