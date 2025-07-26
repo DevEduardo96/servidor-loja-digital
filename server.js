@@ -17,7 +17,11 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
+      // Permite chamadas sem 'origin' (como em HTML local)
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
       if (allowedOrigins.includes(origin)) return callback(null, true);
       return callback(new Error("CORS origin não permitida"));
     },
@@ -532,13 +536,6 @@ app.post("/admin/produtos", verificarAuth, (req, res) => {
 });
 
 // Remover produto
-const {
-  listarProdutos,
-  adicionarProduto,
-  removerProduto,
-} = require("./Produtos");
-
-// Rota DELETE
 app.delete("/admin/produtos/:id", verificarAuth, (req, res) => {
   const { id } = req.params;
   removerProduto(id);
