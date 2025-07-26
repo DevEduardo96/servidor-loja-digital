@@ -1,5 +1,5 @@
 // Produtos.js
-const produtos = [
+let produtos = [
   {
     id: "2511ce44-fa75-4ce2-8ce8-d0590e7cb394",
     nome: "Curso Completo de React.js",
@@ -43,7 +43,22 @@ function getProdutoPorId(id) {
   return produtos.find((produto) => produto.id === id);
 }
 
+function adicionarProduto(produto) {
+  produtos.push(produto);
+}
+
+function removerProduto(id) {
+  produtos = produtos.filter((produto) => produto.id !== id);
+}
+
+function listarProdutos() {
+  return produtos;
+}
+
 module.exports = {
   produtos,
   getProdutoPorId,
+  adicionarProduto,
+  removerProduto,
+  listarProdutos,
 };

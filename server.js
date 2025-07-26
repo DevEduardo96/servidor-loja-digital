@@ -487,3 +487,48 @@ app.get("/admin/pagamentos", (req, res) => {
 });
 
 app.use(express.static("public"));
+
+const {
+  listarProdutos,
+  adicionarProduto,
+  removerProduto,
+} = require("./Produtos");
+
+// Middleware para autenticação simples
+function verificarAuth(req, res, next) {
+  const auth = req.headers.authorization;
+  if (auth !== "Bearer senha-secreta") {
+    return res.status(401).json({ error: "Não autorizado" });
+  }
+  next();
+}
+
+// Listar produtos
+app.get("/admin/produtos", verificarAuth, (req, res) => {
+  res.json(listarProdutos());
+});
+
+// Adicionar produto
+app.post("/admin/produtos", verificarAuth, (req, res) => {
+  const { nome, preco, linkDownload } = req.body;
+  if (!nome || !preco || !linkDownload) {
+    return res
+      .status(400)
+      .json({ error: "Campos obrigatórios: nome, preco, linkDownload" });
+  }
+  const novoProduto = {
+    id: crypto.randomUUID(),
+    nome,
+    preco,
+    linkDownload,
+  };
+  adicionarProduto(novoProduto);
+  res.json({ success: true, produto: novoProduto });
+});
+
+// Remover produto
+app.delete("/admin/produtos/:id", verificarAuth, (req, res) => {
+  const { id } = req.params;
+  removerProduto(id);
+  res.json({ success: true, id });
+});
