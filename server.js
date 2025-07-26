@@ -126,7 +126,7 @@ app.post("/criar-pagamento", async (req, res) => {
         return;
       }
 
-      const produto = produtos.find((prod) => prod.id === itemId);
+      const produto = listarProdutos().find((prod) => prod.id === itemId);
 
       if (produto) {
         console.log(`✅ Produto encontrado: ${produto.nome}`);
