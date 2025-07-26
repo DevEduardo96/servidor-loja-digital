@@ -475,3 +475,13 @@ app.listen(PORT, () => {
     console.log(`🐛 Debug endpoints disponíveis em modo desenvolvimento`);
   }
 });
+
+// Rota para listar pagamentos (admin)
+app.get("/admin/pagamentos", (req, res) => {
+  const auth = req.headers.authorization;
+  if (auth !== "Bearer senha-secreta") {
+    return res.status(401).json({ error: "Não autorizado" });
+  }
+
+  res.json(Object.values(pagamentos));
+});
