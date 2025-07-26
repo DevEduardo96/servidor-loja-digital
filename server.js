@@ -8,7 +8,12 @@ const app = express();
 app.use(express.json());
 
 // CORS configurado
-const allowedOrigins = ["https://artfy.netlify.app", "http://localhost:5173"];
+const allowedOrigins = [
+  "https://artfy.netlify.app",
+  "http://localhost:5173",
+  "https://servidor-loja-digital.onrender.com",
+];
+
 app.use(
   cors({
     origin: (origin, callback) => {
