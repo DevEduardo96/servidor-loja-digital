@@ -527,6 +527,13 @@ app.post("/admin/produtos", verificarAuth, (req, res) => {
 });
 
 // Remover produto
+const {
+  listarProdutos,
+  adicionarProduto,
+  removerProduto,
+} = require("./Produtos");
+
+// Rota DELETE
 app.delete("/admin/produtos/:id", verificarAuth, (req, res) => {
   const { id } = req.params;
   removerProduto(id);

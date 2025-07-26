@@ -56,7 +56,6 @@ function listarProdutos() {
 }
 
 module.exports = {
-  produtos,
   getProdutoPorId,
   adicionarProduto,
   removerProduto,
