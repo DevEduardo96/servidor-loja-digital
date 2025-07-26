@@ -485,3 +485,5 @@ app.get("/admin/pagamentos", (req, res) => {
 
   res.json(Object.values(pagamentos));
 });
+
+app.use(express.static("public"));
