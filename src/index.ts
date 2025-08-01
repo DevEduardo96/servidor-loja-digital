@@ -2,7 +2,7 @@ import express from "express";
 import { registerRoutes } from "./routes.js";
 import dotenv from "dotenv";
 dotenv.config();
-
+//testando melhorias
 const app = express();
 
 // Middleware de CORS adequado
