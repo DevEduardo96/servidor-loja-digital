@@ -2,10 +2,10 @@ import express from "express";
 import { registerRoutes } from "./routes.js";
 import dotenv from "dotenv";
 dotenv.config();
-//testando melhorias
+
 const app = express();
 
-// Middleware de CORS adequado
+// CORS DEVE SER O PRIMEIRO MIDDLEWARE (antes de qualquer outro)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   const allowedOrigins = process.env.FRONTEND_URL?.split(",") || [
@@ -14,37 +14,49 @@ app.use((req, res, next) => {
     "https://artfy.netlify.app"
   ];
 
-  if (origin && allowedOrigins.includes(origin)) {
-    res.header("Access-Control-Allow-Origin", origin);
+  // Log para debug
+  console.log(`[CORS] Origin: ${origin}, Method: ${req.method}, Path: ${req.path}`);
+
+  // Permitir origens específicas OU requests sem origin (como Postman)
+  if (!origin || allowedOrigins.includes(origin)) {
+    res.header("Access-Control-Allow-Origin", origin || "*");
   }
 
-  res.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  // Headers mais completos
+  res.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS,PATCH");
+  res.header("Access-Control-Allow-Headers", "Origin,X-Requested-With,Content-Type,Accept,Authorization,Cache-Control,X-Access-Token");
   res.header("Access-Control-Allow-Credentials", "true");
+  res.header("Access-Control-Max-Age", "86400"); // Cache preflight por 24h
 
+  // Responder a requisições OPTIONS (preflight)
   if (req.method === "OPTIONS") {
+    console.log(`[CORS] Preflight request for ${req.path}`);
     return res.sendStatus(200);
   }
 
   next();
 });
 
-// Rota de teste para homepage (fora do middleware CORS!)
+// Middlewares básicos (DEPOIS do CORS)
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: false }));
+
+// Rota de teste para homepage
 app.get("/", (req, res) => {
-  res.send("🚀 Servidor Loja Digital está rodando!");
+  res.json({
+    message: "🚀 Servidor Loja Digital está rodando!",
+    timestamp: new Date().toISOString(),
+    cors: "enabled"
+  });
 });
 
-// Middlewares de segurança
+// Middlewares de segurança (DEPOIS dos middlewares básicos)
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("X-XSS-Protection", "1; mode=block");
   next();
 });
-
-// Middlewares básicos
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: false }));
 
 // Log de requisições
 app.use((req, res, next) => {
@@ -82,7 +94,14 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || "development"
+    environment: process.env.NODE_ENV || "development",
+    cors: {
+      allowedOrigins: process.env.FRONTEND_URL?.split(",") || [
+        "http://localhost:3000",
+        "http://localhost:5173", 
+        "https://artfy.netlify.app"
+      ]
+    }
   });
 });
 
@@ -120,4 +139,5 @@ app.listen(port, () => {
   console.log(`[${new Date().toISOString()}] 🚀 Servidor rodando na porta ${port}`);
   console.log(`[${new Date().toISOString()}] 🌍 Ambiente: ${process.env.NODE_ENV || "development"}`);
   console.log(`[${new Date().toISOString()}] 📋 Health check: http://localhost:${port}/health`);
+  console.log(`[${new Date().toISOString()}] 🔒 CORS configurado para: https://artfy.netlify.app`);
 });
