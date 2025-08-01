@@ -1,4 +1,34 @@
-import type { Express } from "express";
+// Tipos para diagnóstico
+interface DiagnosticoResponse {
+  timestamp: string;
+  ambiente: string;
+  configuracoes: {
+    supabase_url: boolean;
+    supabase_key: boolean;
+    mercado_pago: boolean;
+  };
+  testes: {
+    supabase?: {
+      status: string;
+      erro?: string;
+      codigo?: string;
+      detalhes?: string;
+      tempo_resposta?: number;
+      produtos_ativos?: number;
+      produtos_retornados?: number;
+      amostra?: any[];
+      motivo?: string;
+      tipo?: string;
+    };
+    mercado_pago?: {
+      status: string;
+      cliente_criado?: boolean;
+      erro?: string;
+      motivo?: string;
+    };
+  };
+  status_geral: string;
+}import type { Express } from "express";
 import { createClient } from "@supabase/supabase-js";
 import { MercadoPagoConfig, Payment } from "mercadopago";
 import { z } from "zod";
