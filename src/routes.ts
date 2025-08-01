@@ -20,8 +20,21 @@ async function retryWithBackoff<T>(
   throw new Error("Max retries exceeded");
 }
 
-// Validação dos dados de entrada
+// Validação dos dados de entrada para pagamento
 const createPaymentSchema = z.object({
+  carrinho: z.array(z.object({
+    id: z.union([z.string(), z.number()]),
+    name: z.string(),
+    price: z.number(),
+    quantity: z.number().optional().default(1)
+  })),
+  nomeCliente: z.string(),
+  email: z.string().email(),
+  total: z.number()
+});
+
+// Validação para busca de produto individual
+const productSchema = z.object({
   produtoId: z.union([z.string(), z.number()]).transform(val => String(val)),
   email: z.string().email(),
 });
@@ -77,7 +90,6 @@ export function registerRoutes(app: Express): void {
       if (error) {
         console.error(`[${new Date().toISOString()}] ❌ Erro do Supabase:`, error);
         
-        // Se a tabela não existe, retornar instruções
         if (error.message?.includes("does not exist") || error.message?.includes("não existe")) {
           return res.status(404).json({ 
             error: "Tabela 'produtos' não encontrada",
@@ -97,7 +109,6 @@ export function registerRoutes(app: Express): void {
     } catch (error) {
       console.error(`[${new Date().toISOString()}] ❌ Erro inesperado:`, error);
       
-      // Detectar problemas de rede
       if (error instanceof Error && error.message.includes("fetch failed")) {
         return res.status(503).json({ 
           error: "Problema de conectividade com Supabase",
@@ -113,11 +124,121 @@ export function registerRoutes(app: Express): void {
     }
   });
 
-  // Rota POST /criar-pagamento - Cria um pagamento Pix
+  // NOVA ROTA: POST /api/payments/criar-pagamento - Para o frontend
+  app.post("/api/payments/criar-pagamento", async (req, res) => {
+    try {
+      console.log(`[${new Date().toISOString()}] 🛒 Recebendo dados do carrinho:`, req.body);
+
+      // Validar dados de entrada
+      const validation = createPaymentSchema.safeParse(req.body);
+      if (!validation.success) {
+        console.error(`[${new Date().toISOString()}] ❌ Dados inválidos:`, validation.error.errors);
+        return res.status(400).json({ 
+          error: "Dados inválidos", 
+          details: validation.error.errors 
+        });
+      }
+
+      const { carrinho, nomeCliente, email, total } = validation.data;
+
+      if (!payment) {
+        return res.status(500).json({ 
+          error: "Mercado Pago não configurado. Verifique a variável MERCADO_PAGO_ACCESS_TOKEN." 
+        });
+      }
+
+      // Criar descrição baseada no carrinho
+      const description = carrinho.length === 1 
+        ? carrinho[0].name 
+        : `Compra de ${carrinho.length} produtos`;
+
+      const paymentData = {
+        transaction_amount: total,
+        description: description,
+        payment_method_id: "pix",
+        payer: {
+          email: email,
+          first_name: nomeCliente,
+        },
+        metadata: {
+          carrinho: carrinho,
+          cliente: nomeCliente
+        }
+      };
+
+      console.log(`[${new Date().toISOString()}] 💳 Criando pagamento PIX:`, {
+        amount: total,
+        description,
+        email,
+        cliente: nomeCliente
+      });
+
+      const paymentResponse = await payment.create({ body: paymentData });
+
+      if (!paymentResponse) {
+        return res.status(500).json({ 
+          error: "Erro ao criar pagamento no Mercado Pago" 
+        });
+      }
+
+      // Extrair informações do pagamento
+      const paymentInfo = {
+        id: paymentResponse.id,
+        status: paymentResponse.status,
+        qr_code: paymentResponse.point_of_interaction?.transaction_data?.qr_code || null,
+        qr_code_base64: paymentResponse.point_of_interaction?.transaction_data?.qr_code_base64 || null,
+        ticket_url: paymentResponse.point_of_interaction?.transaction_data?.ticket_url || null,
+        total: total,
+        cliente: nomeCliente,
+        produtos: carrinho
+      };
+
+      console.log(`[${new Date().toISOString()}] ✅ Pagamento criado com sucesso:`, { 
+        id: paymentInfo.id, 
+        status: paymentInfo.status,
+        qr_code_exists: !!paymentInfo.qr_code,
+        qr_code_base64_exists: !!paymentInfo.qr_code_base64
+      });
+
+      res.json(paymentInfo);
+    } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Erro ao criar pagamento:`, error);
+      
+      // Tratar erros específicos do Mercado Pago
+      if (error && typeof error === 'object' && 'message' in error) {
+        const mpError = error as any;
+        
+        if (mpError.message?.includes("without key enabled for QR")) {
+          return res.status(400).json({ 
+            error: "Token do Mercado Pago não configurado para PIX",
+            suggestion: "Verifique se o token tem permissões para gerar QR codes PIX ou use um token de produção",
+            details: mpError.message,
+            mp_error_code: mpError.cause?.[0]?.code
+          });
+        }
+        
+        if (mpError.message?.includes("bad_request")) {
+          return res.status(400).json({ 
+            error: "Erro na requisição para Mercado Pago",
+            details: mpError.message,
+            mp_error_code: mpError.cause?.[0]?.code,
+            suggestion: "Verifique os dados enviados ou as configurações da conta Mercado Pago"
+          });
+        }
+      }
+      
+      res.status(500).json({ 
+        error: "Erro interno do servidor",
+        details: error instanceof Error ? error.message : "Erro desconhecido"
+      });
+    }
+  });
+
+  // ROTA ORIGINAL MANTIDA: POST /criar-pagamento - Para compatibilidade
   app.post("/criar-pagamento", async (req, res) => {
     try {
       // Validar dados de entrada
-      const validation = createPaymentSchema.safeParse(req.body);
+      const validation = productSchema.safeParse(req.body);
       if (!validation.success) {
         return res.status(400).json({ 
           error: "Dados inválidos", 
@@ -158,7 +279,6 @@ export function registerRoutes(app: Express): void {
         });
       }
 
-      // Debug: mostrar estrutura completa do produto
       console.log(`[${new Date().toISOString()}] 📋 Produto encontrado:`, { 
         id: produto.id, 
         name: produto.name, 
@@ -245,5 +365,17 @@ export function registerRoutes(app: Express): void {
         details: error instanceof Error ? error.message : "Erro desconhecido"
       });
     }
+  });
+
+  // Rota de teste para verificar se as rotas de pagamento estão funcionando
+  app.get("/api/payments/test", (req, res) => {
+    res.json({
+      message: "API de pagamentos funcionando!",
+      routes: [
+        "POST /api/payments/criar-pagamento (para carrinho)",
+        "POST /criar-pagamento (para produto individual)"
+      ],
+      timestamp: new Date().toISOString()
+    });
   });
 }

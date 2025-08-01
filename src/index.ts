@@ -5,52 +5,63 @@ dotenv.config();
 
 const app = express();
 
-// CORS DEVE SER O PRIMEIRO MIDDLEWARE (antes de qualquer outro)
+// CORS SIMPLIFICADO - PRIMEIRO MIDDLEWARE
 app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  const allowedOrigins = process.env.FRONTEND_URL?.split(",") || [
+  // Permitir artfy.netlify.app e localhost para desenvolvimento
+  const allowedOrigins = [
+    "https://artfy.netlify.app",
     "http://localhost:3000",
-    "http://localhost:5173",
-    "https://artfy.netlify.app"
+    "http://localhost:5173"
   ];
-
-  // Log para debug
-  console.log(`[CORS] Origin: ${origin}, Method: ${req.method}, Path: ${req.path}`);
-
-  // Permitir origens específicas OU requests sem origin (como Postman)
+  
+  const origin = req.headers.origin;
+  
   if (!origin || allowedOrigins.includes(origin)) {
-    res.header("Access-Control-Allow-Origin", origin || "*");
+    res.header("Access-Control-Allow-Origin", origin || "https://artfy.netlify.app");
   }
-
-  // Headers mais completos
-  res.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS,PATCH");
-  res.header("Access-Control-Allow-Headers", "Origin,X-Requested-With,Content-Type,Accept,Authorization,Cache-Control,X-Access-Token");
+  
+  res.header("Access-Control-Allow-Methods", "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Origin,X-Requested-With,Content-Type,Accept,Authorization");
   res.header("Access-Control-Allow-Credentials", "true");
-  res.header("Access-Control-Max-Age", "86400"); // Cache preflight por 24h
-
-  // Responder a requisições OPTIONS (preflight)
+  
+  // Log para debug
+  console.log(`[CORS] ${req.method} ${req.path} from ${origin || 'no-origin'}`);
+  
   if (req.method === "OPTIONS") {
-    console.log(`[CORS] Preflight request for ${req.path}`);
-    return res.sendStatus(200);
+    console.log("[CORS] Preflight OK");
+    return res.status(200).end();
   }
-
+  
   next();
 });
 
-// Middlewares básicos (DEPOIS do CORS)
+// Middlewares básicos
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: false }));
+
+// Middleware de debug para pagamentos
+app.use('/api/payments', (req, res, next) => {
+  console.log(`[PAYMENTS DEBUG] ${req.method} ${req.path}`);
+  console.log('[PAYMENTS DEBUG] Body:', req.body);
+  next();
+});
 
 // Rota de teste para homepage
 app.get("/", (req, res) => {
   res.json({
     message: "🚀 Servidor Loja Digital está rodando!",
     timestamp: new Date().toISOString(),
-    cors: "enabled"
+    cors: "enabled",
+    routes: {
+      produtos: "GET /produtos",
+      pagamento_carrinho: "POST /api/payments/criar-pagamento",
+      pagamento_individual: "POST /criar-pagamento",
+      test_payments: "GET /api/payments/test"
+    }
   });
 });
 
-// Middlewares de segurança (DEPOIS dos middlewares básicos)
+// Middlewares de segurança
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
@@ -95,13 +106,7 @@ app.get("/health", (req, res) => {
     status: "ok",
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || "development",
-    cors: {
-      allowedOrigins: process.env.FRONTEND_URL?.split(",") || [
-        "http://localhost:3000",
-        "http://localhost:5173", 
-        "https://artfy.netlify.app"
-      ]
-    }
+    cors: "enabled for artfy.netlify.app"
   });
 });
 
@@ -125,10 +130,19 @@ app.use(
 
 // Rota catch-all
 app.use("*", (req, res) => {
+  console.log(`[404] ${req.method} ${req.originalUrl}`);
   res.status(404).json({
     error: "Endpoint não encontrado",
     path: req.originalUrl,
-    method: req.method
+    method: req.method,
+    available_routes: [
+      "GET /",
+      "GET /health", 
+      "GET /produtos",
+      "POST /api/payments/criar-pagamento",
+      "POST /criar-pagamento",
+      "GET /api/payments/test"
+    ]
   });
 });
 
@@ -140,4 +154,5 @@ app.listen(port, () => {
   console.log(`[${new Date().toISOString()}] 🌍 Ambiente: ${process.env.NODE_ENV || "development"}`);
   console.log(`[${new Date().toISOString()}] 📋 Health check: http://localhost:${port}/health`);
   console.log(`[${new Date().toISOString()}] 🔒 CORS configurado para: https://artfy.netlify.app`);
+  console.log(`[${new Date().toISOString()}] 💳 Rota de pagamentos: POST /api/payments/criar-pagamento`);
 });
