@@ -475,4 +475,65 @@ export function registerRoutes(app: Express): void {
       timestamp: new Date().toISOString()
     });
   });
+
+    // NOVA ROTA: Buscar links de download do pedido
+  app.get("/api/payments/link-download/:paymentId", async (req, res) => {
+    const { paymentId } = req.params;
+
+    if (!supabase) {
+      return res.status(500).json({ error: "Supabase não configurado." });
+    }
+
+    try {
+      console.log(`[${new Date().toISOString()}] 🔍 Buscando links de download para paymentId: ${paymentId}`);
+
+      // Busca pedido + downloads + produtos
+      const { data: pedido, error } = await supabase
+        .from("pedidos")
+        .select(`
+          id,
+          email,
+          valor_total,
+          created_at,
+          downloads (
+            link_temporario,
+            expires_at
+          ),
+          pedido_itens (
+            produto:produtos (
+              id,
+              name,
+              description,
+              price,
+              image_url,
+              category
+            )
+          )
+        `)
+        .eq("payment_id", paymentId)
+        .single();
+
+      if (error || !pedido) {
+        console.error(`[${new Date().toISOString()}] ❌ Pedido não encontrado:`, error?.message);
+        return res.status(404).json({ error: "Pedido não encontrado" });
+      }
+
+      // Extrair links e produtos
+      const links = pedido.downloads?.map((d: any) => d.link_temporario) || [];
+      const produtos = pedido.pedido_itens?.map((p: any) => p.produto) || [];
+
+      return res.json({
+        links,
+        products: produtos,
+        customerName: pedido.email,
+        total: pedido.valor_total,
+        downloadedAt: new Date().toISOString(),
+        expiresIn: "7 dias"
+      });
+    } catch (err) {
+      console.error(`[${new Date().toISOString()}] ❌ Erro ao buscar links:`, err);
+      res.status(500).json({ error: "Erro ao buscar links de download" });
+    }
+  });
+
 }
