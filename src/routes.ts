@@ -352,6 +352,8 @@ export function registerRoutes(app: Express): void {
         });
       }
 
+      
+
       // Extrair informações do pagamento
       const paymentInfo = {
         id: paymentResponse.id,
@@ -399,6 +401,38 @@ export function registerRoutes(app: Express): void {
       });
     }
   });
+  app.get("/api/payments/status-pagamento/:paymentId", async (req, res) => {
+  const { paymentId } = req.params;
+
+  if (!paymentId) {
+    return res.status(400).json({ error: "ID de pagamento ausente." });
+  }
+
+  if (!client) {
+    return res.status(500).json({ error: "Cliente Mercado Pago não configurado." });
+  }
+
+  try {
+    const paymentStatus = await new Payment(client).get({ id: paymentId });
+
+    return res.json({
+      id: paymentStatus.id,
+      status: paymentStatus.status,
+      status_detail: paymentStatus.status_detail,
+      payer_email: paymentStatus.payer?.email,
+      transaction_amount: paymentStatus.transaction_amount,
+      date_approved: paymentStatus.date_approved,
+      date_created: paymentStatus.date_created,
+    });
+  } catch (error: any) {
+    console.error("[Pagamento] Erro ao consultar status:", error.message);
+    return res.status(500).json({
+      error: "Erro ao consultar status do pagamento",
+      details: error.message,
+    });
+  }
+});
+
 
   // Rota de teste para verificar estrutura do carrinho
   app.post("/api/payments/test-carrinho", (req, res) => {
@@ -429,52 +463,16 @@ export function registerRoutes(app: Express): void {
     });
   });
 
- // Rota de teste para verificar se as rotas de pagamento estão funcionando
+  // Rota de teste para verificar se as rotas de pagamento estão funcionando
   app.get("/api/payments/test", (req, res) => {
     res.json({
       message: "API de pagamentos funcionando!",
       routes: [
         "POST /api/payments/criar-pagamento (para carrinho)",
         "POST /api/payments/test-carrinho (para testar estrutura)", 
-        "POST /criar-pagamento (para produto individual)",
-        "GET /api/payments/status-pagamento/:paymentId (consultar status de pagamento)"
+        "POST /criar-pagamento (para produto individual)"
       ],
       timestamp: new Date().toISOString()
     });
   });
-
-  // ✅ NOVA ROTA: Consultar status de pagamento pelo ID
-  app.get("/api/payments/status-pagamento/:paymentId", async (req, res) => {
-    const { paymentId } = req.params;
-
-    if (!payment) {
-      return res.status(500).json({
-        error: "Mercado Pago não configurado. Verifique a variável MERCADO_PAGO_ACCESS_TOKEN."
-      });
-    }
-
-    try {
-      console.log(`[${new Date().toISOString()}] 🔍 Consultando status do pagamento: ${paymentId}`);
-
-      const result = await payment.get(paymentId);
-
-      return res.json({
-        id: result.id,
-        status: result.status,
-        status_detail: result.status_detail,
-        payer_email: result.payer?.email,
-        transaction_amount: result.transaction_amount,
-        date_approved: result.date_approved,
-        date_created: result.date_created
-      });
-    } catch (error) {
-      console.error(`[${new Date().toISOString()}] ❌ Erro ao consultar pagamento:`, error);
-
-      return res.status(404).json({
-        error: "Pagamento não encontrado ou erro ao consultar",
-        details: error instanceof Error ? error.message : "Erro desconhecido"
-      });
-    }
-  });
-
 }
