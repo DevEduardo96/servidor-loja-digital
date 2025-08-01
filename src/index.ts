@@ -2,10 +2,10 @@ import express from "express";
 import { registerRoutes } from "./routes.js";
 import dotenv from "dotenv";
 dotenv.config();
-
+//testando melhorias
 const app = express();
 
-// Middleware CORS
+// Middleware de CORS adequado
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   const allowedOrigins = process.env.FRONTEND_URL?.split(",") || [
@@ -14,14 +14,13 @@ app.use((req, res, next) => {
     "https://artfy.netlify.app"
   ];
 
-  // Permitir apenas origens válidas
   if (origin && allowedOrigins.includes(origin)) {
     res.header("Access-Control-Allow-Origin", origin);
-    res.header("Access-Control-Allow-Credentials", "true");
   }
 
   res.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.header("Access-Control-Allow-Credentials", "true");
 
   if (req.method === "OPTIONS") {
     return res.sendStatus(200);
@@ -30,12 +29,12 @@ app.use((req, res, next) => {
   next();
 });
 
-// Teste básico
+// Rota de teste para homepage (fora do middleware CORS!)
 app.get("/", (req, res) => {
   res.send("🚀 Servidor Loja Digital está rodando!");
 });
 
-// Segurança
+// Middlewares de segurança
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
@@ -43,7 +42,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Básicos
+// Middlewares básicos
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: false }));
 
@@ -51,7 +50,7 @@ app.use(express.urlencoded({ extended: false }));
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
-  let capturedJsonResponse;
+  let capturedJsonResponse: Record<string, any> | undefined = undefined;
 
   const originalResJson = res.json;
   res.json = function (bodyJson, ...args) {
@@ -66,9 +65,11 @@ app.use((req, res, next) => {
       if (capturedJsonResponse && res.statusCode >= 400) {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
       }
+
       if (logLine.length > 120) {
         logLine = logLine.slice(0, 119) + "…";
       }
+
       console.log(`[${new Date().toISOString()}] ${logLine}`);
     }
   });
@@ -76,7 +77,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check
+// Endpoint de health check
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
@@ -88,19 +89,22 @@ app.get("/health", (req, res) => {
 // Registrar rotas da API
 registerRoutes(app);
 
-// Erros
-app.use((err, req, res, next) => {
-  console.error(`[${new Date().toISOString()}] Error:`, err);
-  const status = err.status || err.statusCode || 500;
-  const message = err.message || "Internal Server Error";
+// Middleware de tratamento de erros
+app.use(
+  (err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error(`[${new Date().toISOString()}] Error:`, err);
 
-  res.status(status).json({
-    error: message,
-    ...(process.env.NODE_ENV === "development" && { stack: err.stack })
-  });
-});
+    const status = err.status || err.statusCode || 500;
+    const message = err.message || "Internal Server Error";
 
-// Catch-all
+    res.status(status).json({
+      error: message,
+      ...(process.env.NODE_ENV === "development" && { stack: err.stack })
+    });
+  }
+);
+
+// Rota catch-all
 app.use("*", (req, res) => {
   res.status(404).json({
     error: "Endpoint não encontrado",
@@ -109,8 +113,9 @@ app.use("*", (req, res) => {
   });
 });
 
-// Iniciar
+// Iniciar servidor
 const port = process.env.PORT || 3000;
+
 app.listen(port, () => {
   console.log(`[${new Date().toISOString()}] 🚀 Servidor rodando na porta ${port}`);
   console.log(`[${new Date().toISOString()}] 🌍 Ambiente: ${process.env.NODE_ENV || "development"}`);
