@@ -51,47 +51,24 @@ const productSchema = z.object({
 });
 
 export function registerRoutes(app: Express): void {
-  // Configuração do Supabase
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_KEY;
-  
-  console.log(`[${new Date().toISOString()}] 🔧 Configuração do Supabase:`);
-  console.log(`[${new Date().toISOString()}] URL: ${supabaseUrl ? `${supabaseUrl.substring(0, 30)}...` : "❌ Não configurada"}`);
-  console.log(`[${new Date().toISOString()}] KEY: ${supabaseKey ? "✅ Configurada" : "❌ Não configurada"}`);
-  
-  if (!supabaseUrl || !supabaseKey) {
-    console.error(`[${new Date().toISOString()}] ❌ Variáveis SUPABASE_URL e SUPABASE_KEY devem estar configuradas`);
-  }
-  
   const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 
-  // Configuração do Mercado Pago
   const mercadoPagoAccessToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
-  
-  console.log(`[${new Date().toISOString()}] 💳 Mercado Pago: ${mercadoPagoAccessToken ? "✅ Configurado" : "❌ Não configurado"}`);
-  
-  if (!mercadoPagoAccessToken) {
-    console.error(`[${new Date().toISOString()}] ❌ Variável MERCADO_PAGO_ACCESS_TOKEN deve estar configurada`);
-  }
-  
   const client = mercadoPagoAccessToken ? new MercadoPagoConfig({ 
     accessToken: mercadoPagoAccessToken,
     options: { timeout: 5000 }
   }) : null;
-  
+
   const payment = client ? new Payment(client) : null;
 
-  // Rota GET /produtos - Retorna todos os produtos da tabela produtos
   app.get("/produtos", async (req, res) => {
     try {
       if (!supabase) {
-        return res.status(500).json({ 
-          error: "Supabase não configurado. Verifique as variáveis de ambiente." 
-        });
+        return res.status(500).json({ error: "Supabase não configurado." });
       }
 
-      console.log(`[${new Date().toISOString()}] 🔍 Buscando produtos...`);
-      
       const result = await retryWithBackoff(async () => {
         return await supabase.from("produtos").select("*");
       }, 2, 500);
@@ -99,90 +76,40 @@ export function registerRoutes(app: Express): void {
       const { data: produtos, error } = result;
 
       if (error) {
-        console.error(`[${new Date().toISOString()}] ❌ Erro do Supabase:`, error);
-        
-        if (error.message?.includes("does not exist") || error.message?.includes("não existe")) {
-          return res.status(404).json({ 
-            error: "Tabela 'produtos' não encontrada",
-            instructions: "Crie a tabela 'produtos' no Supabase com os campos: id, name, description, price, image_url",
-            details: error.message 
-          });
-        }
-        
-        return res.status(500).json({ 
-          error: "Erro do banco de dados", 
-          details: error.message 
-        });
+        return res.status(500).json({ error: error.message });
       }
 
-      console.log(`[${new Date().toISOString()}] ✅ Produtos encontrados: ${produtos?.length || 0}`);
       res.json(produtos || []);
     } catch (error) {
-      console.error(`[${new Date().toISOString()}] ❌ Erro inesperado:`, error);
-      
-      if (error instanceof Error && error.message.includes("fetch failed")) {
-        return res.status(503).json({ 
-          error: "Problema de conectividade com Supabase",
-          suggestion: "Verifique se a URL do Supabase está correta e acessível",
-          details: error.message
-        });
-      }
-      
-      res.status(500).json({ 
-        error: "Erro interno do servidor",
-        details: error instanceof Error ? error.message : "Erro desconhecido"
-      });
+      res.status(500).json({ error: "Erro interno", details: error instanceof Error ? error.message : error });
     }
   });
 
-  // NOVA ROTA: POST /api/payments/criar-pagamento - Para o frontend
   app.post("/api/payments/criar-pagamento", async (req, res) => {
     try {
-      console.log(`[${new Date().toISOString()}] 🛒 Dados recebidos:`, JSON.stringify(req.body, null, 2));
-
-      // Validar dados de entrada
       const validation = createPaymentSchema.safeParse(req.body);
       if (!validation.success) {
-        console.error(`[${new Date().toISOString()}] ❌ Erro de validação:`, validation.error.errors);
-        return res.status(400).json({ 
-          error: "Dados inválidos", 
-          details: validation.error.errors,
-          received_data: req.body
-        });
+        return res.status(400).json({ error: "Dados inválidos", details: validation.error.errors });
       }
 
       const { carrinho, nomeCliente, email, total } = validation.data;
 
       if (!payment) {
-        return res.status(500).json({ 
-          error: "Mercado Pago não configurado. Verifique a variável MERCADO_PAGO_ACCESS_TOKEN." 
-        });
+        return res.status(500).json({ error: "Mercado Pago não configurado." });
       }
 
-      // Criar descrição baseada no carrinho
       const firstItem = carrinho[0];
-      const itemName = firstItem.name;
       const description = carrinho.length === 1 
-        ? itemName
-        : `Compra de ${carrinho.length} produtos - ${itemName} e outros`;
+        ? firstItem.name
+        : `Compra de ${carrinho.length} produtos - ${firstItem.name} e outros`;
 
-      // O preço não vem no item, então usamos o total dividido pela quantidade total
       const totalQuantity = carrinho.reduce((sum, item) => sum + item.quantity, 0);
-      console.log(`[${new Date().toISOString()}] 📊 Informações do carrinho:`, {
-        total_recebido: total,
-        total_itens: carrinho.length,
-        quantidade_total: totalQuantity,
-        primeiro_item: itemName
-      });
 
       const paymentData = {
         transaction_amount: total,
-        description: description,
+        description,
         payment_method_id: "pix",
-        payer: {
-          email: email,
-          first_name: nomeCliente,
-        },
+        payer: { email, first_name: nomeCliente },
         metadata: {
           carrinho: carrinho.map(item => ({
             produto_id: item.id,
@@ -194,30 +121,15 @@ export function registerRoutes(app: Express): void {
         }
       };
 
-      console.log(`[${new Date().toISOString()}] 💳 Criando pagamento PIX:`, {
-        amount: total,
-        description,
-        email,
-        cliente: nomeCliente,
-        items_count: carrinho.length
-      });
-
       const paymentResponse = await payment.create({ body: paymentData });
 
-      if (!paymentResponse) {
-        return res.status(500).json({ 
-          error: "Erro ao criar pagamento no Mercado Pago" 
-        });
-      }
-
-      // Extrair informações do pagamento
       const paymentInfo = {
         id: paymentResponse.id,
         status: paymentResponse.status,
         qr_code: paymentResponse.point_of_interaction?.transaction_data?.qr_code || null,
         qr_code_base64: paymentResponse.point_of_interaction?.transaction_data?.qr_code_base64 || null,
         ticket_url: paymentResponse.point_of_interaction?.transaction_data?.ticket_url || null,
-        total: total,
+        total,
         cliente: nomeCliente,
         produtos: carrinho.map(item => ({
           id: item.id,
@@ -226,76 +138,24 @@ export function registerRoutes(app: Express): void {
         }))
       };
 
-      console.log(`[${new Date().toISOString()}] ✅ Pagamento criado com sucesso:`, { 
-        id: paymentInfo.id, 
-        status: paymentInfo.status,
-        qr_code_exists: !!paymentInfo.qr_code,
-        qr_code_base64_exists: !!paymentInfo.qr_code_base64
-      });
-
       res.json(paymentInfo);
     } catch (error) {
-      console.error(`[${new Date().toISOString()}] ❌ Erro ao criar pagamento:`, error);
-      
-      // Tratar erros específicos do Mercado Pago
-      if (error && typeof error === 'object' && 'message' in error) {
-        const mpError = error as any;
-        
-        if (mpError.message?.includes("without key enabled for QR")) {
-          return res.status(400).json({ 
-            error: "Token do Mercado Pago não configurado para PIX",
-            suggestion: "Verifique se o token tem permissões para gerar QR codes PIX ou use um token de produção",
-            details: mpError.message,
-            mp_error_code: mpError.cause?.[0]?.code
-          });
-        }
-        
-        if (mpError.message?.includes("bad_request")) {
-          return res.status(400).json({ 
-            error: "Erro na requisição para Mercado Pago",
-            details: mpError.message,
-            mp_error_code: mpError.cause?.[0]?.code,
-            suggestion: "Verifique os dados enviados ou as configurações da conta Mercado Pago"
-          });
-        }
-      }
-      
-      res.status(500).json({ 
-        error: "Erro interno do servidor",
-        details: error instanceof Error ? error.message : "Erro desconhecido"
-      });
+      res.status(500).json({ error: "Erro ao criar pagamento", details: error instanceof Error ? error.message : error });
     }
   });
 
-  // ROTA ORIGINAL MANTIDA: POST /criar-pagamento - Para compatibilidade
   app.post("/criar-pagamento", async (req, res) => {
     try {
-      // Validar dados de entrada
       const validation = productSchema.safeParse(req.body);
       if (!validation.success) {
-        return res.status(400).json({ 
-          error: "Dados inválidos", 
-          details: validation.error.errors 
-        });
+        return res.status(400).json({ error: "Dados inválidos", details: validation.error.errors });
       }
 
       const { produtoId, email } = validation.data;
 
-      if (!supabase) {
-        return res.status(500).json({ 
-          error: "Supabase não configurado. Verifique as variáveis de ambiente." 
-        });
-      }
+      if (!supabase) return res.status(500).json({ error: "Supabase não configurado" });
+      if (!payment) return res.status(500).json({ error: "Mercado Pago não configurado" });
 
-      if (!payment) {
-        return res.status(500).json({ 
-          error: "Mercado Pago não configurado. Verifique a variável MERCADO_PAGO_ACCESS_TOKEN." 
-        });
-      }
-
-      // Buscar o produto no Supabase
-      console.log(`[${new Date().toISOString()}] 🔍 Buscando produto com ID: ${produtoId}`);
-      
       const { data: produto, error: produtoError } = await retryWithBackoff(async () => {
         return await supabase
           .from("produtos")
@@ -305,54 +165,24 @@ export function registerRoutes(app: Express): void {
       }, 2, 500);
 
       if (produtoError || !produto) {
-        console.error(`[${new Date().toISOString()}] ❌ Erro ao buscar produto:`, produtoError);
-        return res.status(404).json({ 
-          error: "Produto não encontrado",
-          details: produtoError?.message 
-        });
+        return res.status(404).json({ error: "Produto não encontrado", details: produtoError?.message });
       }
 
-      console.log(`[${new Date().toISOString()}] 📋 Produto encontrado:`, { 
-        id: produto.id, 
-        name: produto.name, 
-        price: produto.price 
-      });
-
-      // Criar pagamento Pix no Mercado Pago
       const amount = parseFloat(produto.price || produto.preco || "0");
-      const description = produto.name || produto.nome || "Produto";
-      
       if (!amount || amount <= 0) {
-        return res.status(400).json({ 
-          error: "Preço do produto inválido",
-          details: `Preço encontrado: ${amount}` 
-        });
+        return res.status(400).json({ error: "Preço do produto inválido" });
       }
 
+      const description = produto.name || "Produto";
       const paymentData = {
         transaction_amount: amount,
-        description: description,
-        payment_method_id: "pix",
-        payer: {
-          email: email,
-        },
-      };
-
-      console.log(`[${new Date().toISOString()}] 💳 Criando pagamento:`, {
-        amount,
         description,
-        email
-      });
+        payment_method_id: "pix",
+        payer: { email }
+      };
 
       const paymentResponse = await payment.create({ body: paymentData });
 
-      if (!paymentResponse) {
-        return res.status(500).json({ 
-          error: "Erro ao criar pagamento no Mercado Pago" 
-        });
-      }
-
-      // Extrair informações do pagamento
       const paymentInfo = {
         id: paymentResponse.id,
         status: paymentResponse.status,
@@ -361,49 +191,13 @@ export function registerRoutes(app: Express): void {
         ticket_url: paymentResponse.point_of_interaction?.transaction_data?.ticket_url || null,
       };
 
-      console.log(`[${new Date().toISOString()}] ✅ Pagamento criado:`, { 
-        id: paymentInfo.id, 
-        status: paymentInfo.status 
-      });
-
       res.json(paymentInfo);
     } catch (error) {
-      console.error(`[${new Date().toISOString()}] ❌ Erro ao criar pagamento:`, error);
-      
-      // Tratar erros específicos do Mercado Pago
-      if (error && typeof error === 'object' && 'message' in error) {
-        const mpError = error as any;
-        
-        if (mpError.message?.includes("without key enabled for QR")) {
-          return res.status(400).json({ 
-            error: "Token do Mercado Pago não configurado para PIX",
-            suggestion: "Verifique se o token tem permissões para gerar QR codes PIX ou use um token de produção",
-            details: mpError.message,
-            mp_error_code: mpError.cause?.[0]?.code
-          });
-        }
-        
-        if (mpError.message?.includes("bad_request")) {
-          return res.status(400).json({ 
-            error: "Erro na requisição para Mercado Pago",
-            details: mpError.message,
-            mp_error_code: mpError.cause?.[0]?.code,
-            suggestion: "Verifique os dados enviados ou as configurações da conta Mercado Pago"
-          });
-        }
-      }
-      
-      res.status(500).json({ 
-        error: "Erro interno do servidor",
-        details: error instanceof Error ? error.message : "Erro desconhecido"
-      });
+      res.status(500).json({ error: "Erro interno", details: error instanceof Error ? error.message : error });
     }
   });
 
-  // Rota de teste para verificar estrutura do carrinho
   app.post("/api/payments/test-carrinho", (req, res) => {
-    console.log(`[TEST] Estrutura do carrinho recebida:`, JSON.stringify(req.body, null, 2));
-    
     res.json({
       message: "Dados recebidos com sucesso!",
       estrutura_recebida: {
@@ -417,28 +211,50 @@ export function registerRoutes(app: Express): void {
         })),
         nomeCliente: req.body.nomeCliente,
         email: req.body.email,
-        total: req.body.total,
-        tipos: {
-          carrinho: typeof req.body.carrinho,
-          nomeCliente: typeof req.body.nomeCliente,
-          email: typeof req.body.email,
-          total: typeof req.body.total
-        }
+        total: req.body.total
       },
       timestamp: new Date().toISOString()
     });
   });
 
-  // Rota de teste para verificar se as rotas de pagamento estão funcionando
   app.get("/api/payments/test", (req, res) => {
     res.json({
       message: "API de pagamentos funcionando!",
       routes: [
-        "POST /api/payments/criar-pagamento (para carrinho)",
-        "POST /api/payments/test-carrinho (para testar estrutura)", 
-        "POST /criar-pagamento (para produto individual)"
-      ],
-      timestamp: new Date().toISOString()
+        "POST /api/payments/criar-pagamento",
+        "POST /criar-pagamento",
+        "GET /api/payments/status-pagamento/:paymentId"
+      ]
     });
+  });
+
+  // ✅ NOVA ROTA ADICIONADA AQUI
+  app.get("/api/payments/status-pagamento/:paymentId", async (req, res) => {
+    const { paymentId } = req.params;
+
+    if (!payment) {
+      return res.status(500).json({
+        error: "Mercado Pago não configurado. Verifique a variável MERCADO_PAGO_ACCESS_TOKEN."
+      });
+    }
+
+    try {
+      const result = await payment.get(paymentId);
+
+      return res.json({
+        id: result.id,
+        status: result.status,
+        status_detail: result.status_detail,
+        payer_email: result.payer?.email,
+        transaction_amount: result.transaction_amount,
+        date_approved: result.date_approved,
+        date_created: result.date_created
+      });
+    } catch (error) {
+      return res.status(404).json({
+        error: "Pagamento não encontrado ou erro ao consultar",
+        details: error instanceof Error ? error.message : "Erro desconhecido"
+      });
+    }
   });
 }
