@@ -20,18 +20,16 @@ async function retryWithBackoff<T>(
   throw new Error("Max retries exceeded");
 }
 
-// Validação dos dados de entrada para pagamento (estrutura correta do carrinho)
+// Validação dos dados de entrada para pagamento (estrutura real do frontend)
 const createPaymentSchema = z.object({
   carrinho: z.array(z.object({
-    product: z.object({
-      id: z.union([z.string(), z.number()]),
-      name: z.string(),
-      price: z.union([z.number(), z.string()]).transform(val => {
-        const num = typeof val === 'string' ? parseFloat(val) : val;
-        if (isNaN(num)) throw new Error("Preço inválido");
-        return num;
-      }),
-      image_url: z.string().optional()
+    id: z.union([z.string(), z.number()]),
+    name: z.string(),
+    price: z.union([z.number(), z.string()]).optional().transform(val => {
+      if (val === undefined) return undefined;
+      const num = typeof val === 'string' ? parseFloat(val) : val;
+      if (isNaN(num)) throw new Error("Preço inválido");
+      return num;
     }),
     quantity: z.number().min(1, "Quantidade deve ser maior que zero")
   })),
@@ -163,27 +161,19 @@ export function registerRoutes(app: Express): void {
 
       // Criar descrição baseada no carrinho
       const firstItem = carrinho[0];
-      const itemName = firstItem.product.name;
+      const itemName = firstItem.name;
       const description = carrinho.length === 1 
         ? itemName
         : `Compra de ${carrinho.length} produtos - ${itemName} e outros`;
 
-      // Calcular total baseado nos itens (validação adicional)
-      const calculatedTotal = carrinho.reduce((sum, item) => {
-        return sum + (item.product.price * item.quantity);
-      }, 0);
-
-      console.log(`[${new Date().toISOString()}] 📊 Verificação de totais:`, {
+      // O preço não vem no item, então usamos o total dividido pela quantidade total
+      const totalQuantity = carrinho.reduce((sum, item) => sum + item.quantity, 0);
+      console.log(`[${new Date().toISOString()}] 📊 Informações do carrinho:`, {
         total_recebido: total,
-        total_calculado: calculatedTotal,
-        diferenca: Math.abs(total - calculatedTotal)
+        total_itens: carrinho.length,
+        quantidade_total: totalQuantity,
+        primeiro_item: itemName
       });
-
-      // Usar o total recebido (confiando no frontend)
-      // Mas alertar se houver diferença significativa
-      if (Math.abs(total - calculatedTotal) > 0.01) {
-        console.warn(`[${new Date().toISOString()}] ⚠️ Diferença nos totais detectada!`);
-      }
 
       const paymentData = {
         transaction_amount: total,
@@ -195,9 +185,8 @@ export function registerRoutes(app: Express): void {
         },
         metadata: {
           carrinho: carrinho.map(item => ({
-            produto_id: item.product.id,
-            nome: item.product.name,
-            preco: item.product.price,
+            produto_id: item.id,
+            nome: item.name,
             quantidade: item.quantity
           })),
           cliente: nomeCliente,
@@ -231,11 +220,9 @@ export function registerRoutes(app: Express): void {
         total: total,
         cliente: nomeCliente,
         produtos: carrinho.map(item => ({
-          id: item.product.id,
-          nome: item.product.name,
-          preco: item.product.price,
-          quantidade: item.quantity,
-          subtotal: item.product.price * item.quantity
+          id: item.id,
+          nome: item.name,
+          quantidade: item.quantity
         }))
       };
 
