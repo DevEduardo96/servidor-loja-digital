@@ -413,12 +413,42 @@ export function registerRoutes(app: Express): void {
     }
   });
 
+  // Rota de teste para verificar estrutura do carrinho
+  app.post("/api/payments/test-carrinho", (req, res) => {
+    console.log(`[TEST] Estrutura do carrinho recebida:`, JSON.stringify(req.body, null, 2));
+    
+    res.json({
+      message: "Dados recebidos com sucesso!",
+      estrutura_recebida: {
+        carrinho: req.body.carrinho?.map((item: any, index: number) => ({
+          index,
+          tem_product: !!item.product,
+          product_id: item.product?.id,
+          product_name: item.product?.name,
+          product_price: item.product?.price,
+          quantity: item.quantity
+        })),
+        nomeCliente: req.body.nomeCliente,
+        email: req.body.email,
+        total: req.body.total,
+        tipos: {
+          carrinho: typeof req.body.carrinho,
+          nomeCliente: typeof req.body.nomeCliente,
+          email: typeof req.body.email,
+          total: typeof req.body.total
+        }
+      },
+      timestamp: new Date().toISOString()
+    });
+  });
+
   // Rota de teste para verificar se as rotas de pagamento estão funcionando
   app.get("/api/payments/test", (req, res) => {
     res.json({
       message: "API de pagamentos funcionando!",
       routes: [
         "POST /api/payments/criar-pagamento (para carrinho)",
+        "POST /api/payments/test-carrinho (para testar estrutura)", 
         "POST /criar-pagamento (para produto individual)"
       ],
       timestamp: new Date().toISOString()
