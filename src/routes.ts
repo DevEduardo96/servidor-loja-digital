@@ -80,22 +80,145 @@ const productSchema = z.object({
   email: z.string().email(),
 });
 
+// Função para testar conectividade do Supabase
+async function testarConexaoSupabase(supabase: any): Promise<boolean> {
+  try {
+    console.log(`[${new Date().toISOString()}] 🧪 Testando conexão Supabase...`);
+    
+    // Teste simples de conectividade
+    const { data, error } = await supabase
+      .from("produtos")
+      .select("id")
+      .limit(1);
+      
+    if (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Erro no teste de conexão:`, {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code
+      });
+      return false;
+    }
+    
+    console.log(`[${new Date().toISOString()}] ✅ Conexão Supabase OK`);
+    return true;
+    
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Falha crítica na conexão:`, {
+      error_type: error instanceof Error ? error.constructor.name : typeof error,
+      message: error instanceof Error ? error.message : String(error)
+    });
+    return false;
+  }
+}
+
 // Função para buscar produtos do carrinho no Supabase
 async function buscarProdutosCarrinho(supabase: any, carrinho: ItemCarrinho[]): Promise<Produto[]> {
-  const produtoIds = carrinho.map(item => String(item.id));
-  
-  const { data: produtos, error } = await supabase
-    .from("produtos")
-    .select("id, name, description, price, original_price, download_url, image_url, category")
-    .in("id", produtoIds)
-    .eq("is_active", true); // Só produtos ativos
+  try {
+    const produtoIds = carrinho.map(item => String(item.id));
+    
+    console.log(`[${new Date().toISOString()}] 🔍 Buscando produtos IDs:`, produtoIds);
+    
+    // Testar conexão primeiro
+    const conexaoOk = await testarConexaoSupabase(supabase);
+    if (!conexaoOk) {
+      throw new Error("Falha na conectividade com o banco de dados");
+    }
+    
+    // Buscar produtos com timeout
+    const timeoutMs = 10000; // 10 segundos
+    const queryPromise = supabase
+      .from("produtos")
+      .select(`
+        id, 
+        name, 
+        description, 
+        price, 
+        original_price, 
+        download_url, 
+        image_url, 
+        category,
+        is_active
+      `)
+      .in("id", produtoIds)
+      .eq("is_active", true);
+    
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error("Timeout na consulta ao banco")), timeoutMs)
+    );
+    
+    const { data: produtos, error } = await Promise.race([
+      queryPromise,
+      timeoutPromise
+    ]) as any;
 
-  if (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Erro ao buscar produtos:`, error);
-    throw new Error(`Erro ao buscar produtos: ${error.message}`);
+    if (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Erro Supabase:`, {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code,
+        query_ids: produtoIds
+      });
+      
+      // Tratamento específico de erros do Supabase
+      if (error.code === "PGRST116") {
+        throw new Error("Tabela 'produtos' não encontrada. Verifique a estrutura do banco.");
+      }
+      if (error.code === "PGRST301") {
+        throw new Error("Erro de autenticação. Verifique as credenciais do Supabase.");
+      }
+      if (error.message?.includes("JWT")) {
+        throw new Error("Token de acesso expirado ou inválido.");
+      }
+      
+      throw new Error(`Erro do banco de dados: ${error.message}`);
+    }
+
+    console.log(`[${new Date().toISOString()}] 📦 Produtos encontrados: ${produtos?.length || 0}`);
+    
+    // Log dos produtos encontrados para debug
+    if (produtos && produtos.length > 0) {
+      console.log(`[${new Date().toISOString()}] 📋 Produtos retornados:`, 
+        produtos.map((p: any) => ({ 
+          id: p.id, 
+          name: p.name, 
+          price: p.price,
+          has_download: !!p.download_url,
+          is_active: p.is_active
+        }))
+      );
+    }
+    
+    return produtos || [];
+    
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Erro ao buscar produtos:`, {
+      error_type: error instanceof Error ? error.constructor.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack?.substring(0, 500) : undefined,
+      produto_ids: carrinho.map(item => item.id)
+    });
+    
+    // Tratar diferentes tipos de erro
+    if (error instanceof Error) {
+      if (error.message.includes("fetch failed") || error.message.includes("network")) {
+        throw new Error("Problema de conectividade com o banco de dados. Verifique sua conexão de internet.");
+      }
+      if (error.message.includes("Timeout")) {
+        throw new Error("Tempo limite excedido ao consultar o banco. Tente novamente.");
+      }
+      if (error.message.includes("Invalid API key") || error.message.includes("unauthorized")) {
+        throw new Error("Erro de autenticação com o banco de dados. Verifique as configurações.");
+      }
+      if (error.message.includes("relation") && error.message.includes("does not exist")) {
+        throw new Error("Tabela 'produtos' não encontrada no banco de dados.");
+      }
+    }
+    
+    throw error;
   }
-
-  return produtos || [];
 }
 
 // Função para salvar pedido no banco
@@ -154,19 +277,49 @@ async function salvarPedido(supabase: any, dadosPedido: {
 }
 
 export function registerRoutes(app: Express): void {
-  // Configuração do Supabase
+  // Configuração do Supabase com validação robusta
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_KEY;
   
   console.log(`[${new Date().toISOString()}] 🔧 Configuração do Supabase:`);
-  console.log(`[${new Date().toISOString()}] URL: ${supabaseUrl ? `${supabaseUrl.substring(0, 30)}...` : "❌ Não configurada"}`);
-  console.log(`[${new Date().toISOString()}] KEY: ${supabaseKey ? "✅ Configurada" : "❌ Não configurada"}`);
+  console.log(`[${new Date().toISOString()}] URL: ${supabaseUrl ? `${supabaseUrl.substring(0, 50)}...` : "❌ Não configurada"}`);
+  console.log(`[${new Date().toISOString()}] KEY: ${supabaseKey ? `${supabaseKey.substring(0, 20)}...` : "❌ Não configurada"}`);
+  console.log(`[${new Date().toISOString()}] NODE_ENV: ${process.env.NODE_ENV || "development"}`);
   
-  if (!supabaseUrl || !supabaseKey) {
-    console.error(`[${new Date().toISOString()}] ❌ Variáveis SUPABASE_URL e SUPABASE_KEY devem estar configuradas`);
+  // Validações mais rigorosas
+  if (!supabaseUrl) {
+    console.error(`[${new Date().toISOString()}] ❌ CRÍTICO: SUPABASE_URL não configurada`);
+  } else if (!supabaseUrl.startsWith('https://')) {
+    console.error(`[${new Date().toISOString()}] ⚠️ AVISO: SUPABASE_URL deve começar com https://`);
   }
   
-  const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
+  if (!supabaseKey) {
+    console.error(`[${new Date().toISOString()}] ❌ CRÍTICO: SUPABASE_KEY não configurada`);
+  } else if (supabaseKey.length < 50) {
+    console.error(`[${new Date().toISOString()}] ⚠️ AVISO: SUPABASE_KEY parece muito curta`);
+  }
+  
+  let supabase = null;
+  if (supabaseUrl && supabaseKey) {
+    try {
+      supabase = createClient(supabaseUrl, supabaseKey, {
+        auth: {
+          persistSession: false
+        },
+        db: {
+          schema: 'public'
+        },
+        global: {
+          headers: {
+            'User-Agent': 'artfy-backend/1.0'
+          }
+        }
+      });
+      console.log(`[${new Date().toISOString()}] ✅ Cliente Supabase criado com sucesso`);
+    } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Erro ao criar cliente Supabase:`, error);
+    }
+  }
 
   // Configuração do Mercado Pago
   const mercadoPagoAccessToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
@@ -268,12 +421,50 @@ export function registerRoutes(app: Express): void {
 
       // 🔥 BUSCAR PRODUTOS DO SUPABASE INCLUINDO download_url
       console.log(`[${new Date().toISOString()}] 🔍 Buscando produtos no Supabase...`);
-      const produtos = await buscarProdutosCarrinho(supabase, carrinho);
+      console.log(`[${new Date().toISOString()}] 🔧 Supabase URL: ${supabaseUrl ? `${supabaseUrl.substring(0, 50)}...` : "❌ Não configurada"}`);
+      
+      let produtos: Produto[];
+      try {
+        produtos = await buscarProdutosCarrinho(supabase, carrinho);
+      } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Falha ao buscar produtos:`, error);
+        
+        // Retornar erro mais específico baseado no tipo de falha
+        if (error instanceof Error) {
+          if (error.message.includes("conectividade")) {
+            return res.status(503).json({
+              error: "Serviço temporariamente indisponível",
+              details: "Problema de conectividade com o banco de dados",
+              suggestion: "Tente novamente em alguns instantes",
+              timestamp: new Date().toISOString()
+            });
+          }
+          
+          if (error.message.includes("autenticação")) {
+            return res.status(500).json({
+              error: "Erro de configuração do servidor",
+              details: "Problema de autenticação com o banco de dados",
+              suggestion: "Entre em contato com o suporte",
+              timestamp: new Date().toISOString()
+            });
+          }
+        }
+        
+        return res.status(500).json({
+          error: "Erro ao acessar produtos",
+          details: error instanceof Error ? error.message : "Erro desconhecido",
+          suggestion: "Verifique se os produtos existem e tente novamente",
+          timestamp: new Date().toISOString()
+        });
+      }
       
       if (produtos.length === 0) {
+        console.log(`[${new Date().toISOString()}] ⚠️ Nenhum produto encontrado para IDs:`, carrinho.map(item => item.id));
         return res.status(404).json({
           error: "Produtos não encontrados no banco de dados",
-          carrinho_ids: carrinho.map(item => item.id)
+          carrinho_ids: carrinho.map(item => item.id),
+          suggestion: "Verifique se os produtos ainda estão disponíveis",
+          timestamp: new Date().toISOString()
         });
       }
 
@@ -757,6 +948,106 @@ export function registerRoutes(app: Express): void {
     });
   });
 
+  // 🔧 NOVA ROTA: Diagnóstico completo do sistema
+  app.get("/api/diagnostico", async (req, res) => {
+    const diagnostico = {
+      timestamp: new Date().toISOString(),
+      ambiente: process.env.NODE_ENV || "development",
+      configuracoes: {
+        supabase_url: !!supabaseUrl,
+        supabase_key: !!supabaseKey,
+        mercado_pago: !!mercadoPagoAccessToken
+      },
+      testes: {} as any
+    };
+
+    // Teste Supabase
+    if (supabase) {
+      try {
+        console.log(`[${new Date().toISOString()}] 🧪 Executando diagnóstico Supabase...`);
+        
+        const startTime = Date.now();
+        const { data, error, count } = await supabase
+          .from("produtos")
+          .select("id, name, price, is_active", { count: 'exact' })
+          .eq("is_active", true)
+          .limit(5);
+        
+        const responseTime = Date.now() - startTime;
+        
+        if (error) {
+          diagnostico.testes.supabase = {
+            status: "ERRO",
+            erro: error.message,
+            codigo: error.code,
+            detalhes: error.details,
+            tempo_resposta: responseTime
+          };
+        } else {
+          diagnostico.testes.supabase = {
+            status: "OK",
+            produtos_ativos: count || 0,
+            produtos_retornados: data?.length || 0,
+            tempo_resposta: responseTime,
+            amostra: data?.slice(0, 2).map((p: any) => ({ 
+              id: p.id, 
+              name: p.name, 
+              price: p.price 
+            }))
+          };
+        }
+      } catch (error) {
+        diagnostico.testes.supabase = {
+          status: "FALHA_CRITICA",
+          erro: error instanceof Error ? error.message : String(error),
+          tipo: error instanceof Error ? error.constructor.name : typeof error
+        };
+      }
+    } else {
+      diagnostico.testes.supabase = {
+        status: "NAO_CONFIGURADO",
+        motivo: "Cliente Supabase não foi criado"
+      };
+    }
+
+    // Teste Mercado Pago
+    if (payment) {
+      try {
+        // Não vamos fazer uma chamada real, apenas verificar se o cliente foi criado
+        diagnostico.testes.mercado_pago = {
+          status: "CONFIGURADO",
+          cliente_criado: true
+        };
+      } catch (error) {
+        diagnostico.testes.mercado_pago = {
+          status: "ERRO_CONFIGURACAO",
+          erro: error instanceof Error ? error.message : String(error)
+        };
+      }
+    } else {
+      diagnostico.testes.mercado_pago = {
+        status: "NAO_CONFIGURADO",
+        motivo: "Token não fornecido ou inválido"
+      };
+    }
+
+    // Status geral
+    const supabaseOk = diagnostico.testes.supabase?.status === "OK";
+    const mpOk = diagnostico.testes.mercado_pago?.status === "CONFIGURADO";
+    
+    diagnostico.status_geral = supabaseOk && mpOk ? "OPERACIONAL" : "COM_PROBLEMAS";
+    
+    const statusCode = supabaseOk ? 200 : 503;
+    
+    console.log(`[${new Date().toISOString()}] 📊 Diagnóstico concluído:`, {
+      supabase: diagnostico.testes.supabase?.status,
+      mercado_pago: diagnostico.testes.mercado_pago?.status,
+      status_geral: diagnostico.status_geral
+    });
+    
+    res.status(statusCode).json(diagnostico);
+  });
+
   // Rota de teste para verificar se as rotas de pagamento estão funcionando
   app.get("/api/payments/test", (req, res) => {
     res.json({
@@ -766,9 +1057,12 @@ export function registerRoutes(app: Express): void {
         "GET /api/payments/status-pagamento/:paymentId (consultar status)",
         "GET /api/payments/downloads/:paymentId (buscar downloads)",
         "POST /api/payments/test-carrinho (testar estrutura)", 
-        "POST /criar-pagamento (produto individual)"
+        "POST /criar-pagamento (produto individual)",
+        "GET /api/diagnostico (diagnóstico completo)"
       ],
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      supabase_status: supabase ? "configurado" : "não configurado",
+      mercado_pago_status: payment ? "configurado" : "não configurado"
     });
   });
 }
