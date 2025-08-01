@@ -3,6 +3,36 @@ import { createClient } from "@supabase/supabase-js";
 import { MercadoPagoConfig, Payment } from "mercadopago";
 import { z } from "zod";
 
+// Tipos para produtos
+interface Produto {
+  id: string | number;
+  name: string;
+  description?: string;
+  price: number;
+  original_price?: number;
+  download_url?: string;
+  image_url?: string;
+  category?: string;
+  is_active?: boolean;
+  is_featured?: boolean;
+  tags?: string[];
+}
+
+// Tipos para carrinho
+interface ItemCarrinho {
+  id: string | number;
+  name: string;
+  price?: number;
+  quantity: number;
+}
+
+// Tipos para download
+interface DownloadInfo {
+  produto_id: string | number;
+  produto_nome: string;
+  download_url: string;
+}
+
 // Função auxiliar para retry com backoff
 async function retryWithBackoff<T>(
   fn: () => Promise<T>, 
@@ -51,7 +81,7 @@ const productSchema = z.object({
 });
 
 // Função para buscar produtos do carrinho no Supabase
-async function buscarProdutosCarrinho(supabase: any, carrinho: any[]) {
+async function buscarProdutosCarrinho(supabase: any, carrinho: ItemCarrinho[]): Promise<Produto[]> {
   const produtoIds = carrinho.map(item => String(item.id));
   
   const { data: produtos, error } = await supabase
@@ -69,7 +99,14 @@ async function buscarProdutosCarrinho(supabase: any, carrinho: any[]) {
 }
 
 // Função para salvar pedido no banco
-async function salvarPedido(supabase: any, dadosPedido: any) {
+async function salvarPedido(supabase: any, dadosPedido: {
+  paymentId: string | number;
+  email: string;
+  nomeCliente: string;
+  total: number;
+  carrinho: ItemCarrinho[];
+  produtos: Produto[];
+}) {
   try {
     // 1. Inserir pedido principal
     const { data: pedido, error: pedidoError } = await supabase
@@ -91,8 +128,8 @@ async function salvarPedido(supabase: any, dadosPedido: any) {
     }
 
     // 2. Inserir itens do pedido
-    const itens = dadosPedido.produtos.map((produto: any) => {
-      const itemCarrinho = dadosPedido.carrinho.find((c: any) => String(c.id) === String(produto.id));
+    const itens = dadosPedido.produtos.map((produto: Produto) => {
+      const itemCarrinho = dadosPedido.carrinho.find((c: ItemCarrinho) => String(c.id) === String(produto.id));
       return {
         pedido_id: pedido.id,
         produto_id: produto.id,
@@ -241,7 +278,7 @@ export function registerRoutes(app: Express): void {
       }
 
       console.log(`[${new Date().toISOString()}] 📦 Produtos encontrados:`, 
-        produtos.map(p => ({ id: p.id, name: p.name, has_download: !!p.download_url }))
+        produtos.map((p: Produto) => ({ id: p.id, name: p.name, has_download: !!p.download_url }))
       );
 
       // Criar descrição baseada no carrinho
@@ -305,8 +342,8 @@ export function registerRoutes(app: Express): void {
         ticket_url: paymentResponse.point_of_interaction?.transaction_data?.ticket_url || null,
         total: total,
         cliente: nomeCliente,
-        produtos: produtos.map(produto => {
-          const itemCarrinho = carrinho.find(c => String(c.id) === String(produto.id));
+        produtos: produtos.map((produto: Produto) => {
+          const itemCarrinho = carrinho.find((c: ItemCarrinho) => String(c.id) === String(produto.id));
           return {
             id: produto.id,
             nome: produto.name,
@@ -317,12 +354,12 @@ export function registerRoutes(app: Express): void {
         }),
         // 🔥 URLs DE DOWNLOAD SEPARADOS PARA FÁCIL ACESSO
         download_urls: produtos
-          .filter(p => p.download_url) // Só produtos com download
-          .map(p => ({
+          .filter((p: Produto) => p.download_url) // Só produtos com download
+          .map((p: Produto) => ({
             produto_id: p.id,
             produto_nome: p.name,
-            download_url: p.download_url
-          })),
+            download_url: p.download_url!
+          } as DownloadInfo)),
         pedido_id: pedidoSalvo?.id || null
       };
 
@@ -330,7 +367,7 @@ export function registerRoutes(app: Express): void {
         id: paymentInfo.id, 
         status: paymentInfo.status,
         download_urls_count: paymentInfo.download_urls.length,
-        urls: paymentInfo.download_urls.map(u => ({ produto: u.produto_nome, has_url: !!u.download_url }))
+        urls: paymentInfo.download_urls.map((u: DownloadInfo) => ({ produto: u.produto_nome, has_url: !!u.download_url }))
       });
 
       res.json(paymentInfo);
@@ -592,8 +629,8 @@ export function registerRoutes(app: Express): void {
       });
 
       // Criar pagamento Pix no Mercado Pago
-      const amount = parseFloat(produto.price || produto.preco || "0");
-      const description = produto.name || produto.nome || "Produto";
+      const amount = parseFloat(produto.price || "0");
+      const description = produto.name || "Produto";
       
       if (!amount || amount <= 0) {
         return res.status(400).json({ 
