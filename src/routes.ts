@@ -317,9 +317,9 @@ export function registerRoutes(app: Express): void {
 
       const paymentResponse = await payment.create({ body: paymentData });
 
-      if (!paymentResponse) {
+      if (!paymentResponse || !paymentResponse.id) {
         return res.status(500).json({ 
-          error: "Erro ao criar pagamento no Mercado Pago" 
+          error: "Erro ao criar pagamento no Mercado Pago - ID não retornado" 
         });
       }
 
@@ -656,9 +656,9 @@ export function registerRoutes(app: Express): void {
 
       const paymentResponse = await payment.create({ body: paymentData });
 
-      if (!paymentResponse) {
+      if (!paymentResponse || !paymentResponse.id) {
         return res.status(500).json({ 
-          error: "Erro ao criar pagamento no Mercado Pago" 
+          error: "Erro ao criar pagamento no Mercado Pago - ID não retornado" 
         });
       }
 
