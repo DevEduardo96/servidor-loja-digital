@@ -20,17 +20,30 @@ async function retryWithBackoff<T>(
   throw new Error("Max retries exceeded");
 }
 
-// Validação dos dados de entrada para pagamento
+// Validação dos dados de entrada para pagamento (estrutura correta do carrinho)
 const createPaymentSchema = z.object({
   carrinho: z.array(z.object({
-    id: z.union([z.string(), z.number()]),
-    name: z.string(),
-    price: z.number(),
-    quantity: z.number().optional().default(1)
+    product: z.object({
+      id: z.union([z.string(), z.number()]),
+      name: z.string(),
+      price: z.union([z.number(), z.string()]).transform(val => {
+        const num = typeof val === 'string' ? parseFloat(val) : val;
+        if (isNaN(num)) throw new Error("Preço inválido");
+        return num;
+      }),
+      image_url: z.string().optional()
+    }),
+    quantity: z.number().min(1, "Quantidade deve ser maior que zero")
   })),
-  nomeCliente: z.string(),
-  email: z.string().email(),
-  total: z.number()
+  nomeCliente: z.string().min(1, "Nome do cliente é obrigatório"),
+  email: z.string().email("Email inválido"),
+  total: z.union([z.number(), z.string()]).transform(val => {
+    const num = typeof val === 'string' ? parseFloat(val) : val;
+    if (isNaN(num) || num <= 0) {
+      throw new Error("Total deve ser um número maior que zero");
+    }
+    return num;
+  })
 });
 
 // Validação para busca de produto individual
@@ -127,15 +140,16 @@ export function registerRoutes(app: Express): void {
   // NOVA ROTA: POST /api/payments/criar-pagamento - Para o frontend
   app.post("/api/payments/criar-pagamento", async (req, res) => {
     try {
-      console.log(`[${new Date().toISOString()}] 🛒 Recebendo dados do carrinho:`, req.body);
+      console.log(`[${new Date().toISOString()}] 🛒 Dados recebidos:`, JSON.stringify(req.body, null, 2));
 
       // Validar dados de entrada
       const validation = createPaymentSchema.safeParse(req.body);
       if (!validation.success) {
-        console.error(`[${new Date().toISOString()}] ❌ Dados inválidos:`, validation.error.errors);
+        console.error(`[${new Date().toISOString()}] ❌ Erro de validação:`, validation.error.errors);
         return res.status(400).json({ 
           error: "Dados inválidos", 
-          details: validation.error.errors 
+          details: validation.error.errors,
+          received_data: req.body
         });
       }
 
@@ -148,9 +162,28 @@ export function registerRoutes(app: Express): void {
       }
 
       // Criar descrição baseada no carrinho
+      const firstItem = carrinho[0];
+      const itemName = firstItem.product.name;
       const description = carrinho.length === 1 
-        ? carrinho[0].name 
-        : `Compra de ${carrinho.length} produtos`;
+        ? itemName
+        : `Compra de ${carrinho.length} produtos - ${itemName} e outros`;
+
+      // Calcular total baseado nos itens (validação adicional)
+      const calculatedTotal = carrinho.reduce((sum, item) => {
+        return sum + (item.product.price * item.quantity);
+      }, 0);
+
+      console.log(`[${new Date().toISOString()}] 📊 Verificação de totais:`, {
+        total_recebido: total,
+        total_calculado: calculatedTotal,
+        diferenca: Math.abs(total - calculatedTotal)
+      });
+
+      // Usar o total recebido (confiando no frontend)
+      // Mas alertar se houver diferença significativa
+      if (Math.abs(total - calculatedTotal) > 0.01) {
+        console.warn(`[${new Date().toISOString()}] ⚠️ Diferença nos totais detectada!`);
+      }
 
       const paymentData = {
         transaction_amount: total,
@@ -161,8 +194,14 @@ export function registerRoutes(app: Express): void {
           first_name: nomeCliente,
         },
         metadata: {
-          carrinho: carrinho,
-          cliente: nomeCliente
+          carrinho: carrinho.map(item => ({
+            produto_id: item.product.id,
+            nome: item.product.name,
+            preco: item.product.price,
+            quantidade: item.quantity
+          })),
+          cliente: nomeCliente,
+          total_itens: carrinho.length
         }
       };
 
@@ -170,7 +209,8 @@ export function registerRoutes(app: Express): void {
         amount: total,
         description,
         email,
-        cliente: nomeCliente
+        cliente: nomeCliente,
+        items_count: carrinho.length
       });
 
       const paymentResponse = await payment.create({ body: paymentData });
@@ -190,7 +230,13 @@ export function registerRoutes(app: Express): void {
         ticket_url: paymentResponse.point_of_interaction?.transaction_data?.ticket_url || null,
         total: total,
         cliente: nomeCliente,
-        produtos: carrinho
+        produtos: carrinho.map(item => ({
+          id: item.product.id,
+          nome: item.product.name,
+          preco: item.product.price,
+          quantidade: item.quantity,
+          subtotal: item.product.price * item.quantity
+        }))
       };
 
       console.log(`[${new Date().toISOString()}] ✅ Pagamento criado com sucesso:`, { 
