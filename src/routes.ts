@@ -50,6 +50,72 @@ const productSchema = z.object({
   email: z.string().email(),
 });
 
+// Função para buscar produtos do carrinho no Supabase
+async function buscarProdutosCarrinho(supabase: any, carrinho: any[]) {
+  const produtoIds = carrinho.map(item => String(item.id));
+  
+  const { data: produtos, error } = await supabase
+    .from("produtos")
+    .select("id, name, description, price, original_price, download_url, image_url, category")
+    .in("id", produtoIds)
+    .eq("is_active", true); // Só produtos ativos
+
+  if (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Erro ao buscar produtos:`, error);
+    throw new Error(`Erro ao buscar produtos: ${error.message}`);
+  }
+
+  return produtos || [];
+}
+
+// Função para salvar pedido no banco
+async function salvarPedido(supabase: any, dadosPedido: any) {
+  try {
+    // 1. Inserir pedido principal
+    const { data: pedido, error: pedidoError } = await supabase
+      .from("pedidos")
+      .insert({
+        payment_id: dadosPedido.paymentId,
+        email: dadosPedido.email,
+        nome_cliente: dadosPedido.nomeCliente,
+        valor_total: dadosPedido.total,
+        status: 'pending',
+        created_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+
+    if (pedidoError) {
+      console.error(`[${new Date().toISOString()}] ❌ Erro ao salvar pedido:`, pedidoError);
+      return null;
+    }
+
+    // 2. Inserir itens do pedido
+    const itens = dadosPedido.produtos.map((produto: any) => {
+      const itemCarrinho = dadosPedido.carrinho.find((c: any) => String(c.id) === String(produto.id));
+      return {
+        pedido_id: pedido.id,
+        produto_id: produto.id,
+        quantidade: itemCarrinho?.quantity || 1,
+        preco_unitario: produto.price
+      };
+    });
+
+    const { error: itensError } = await supabase
+      .from("pedido_itens")
+      .insert(itens);
+
+    if (itensError) {
+      console.error(`[${new Date().toISOString()}] ❌ Erro ao salvar itens:`, itensError);
+    }
+
+    return pedido;
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Erro geral ao salvar pedido:`, error);
+    return null;
+  }
+}
+
 export function registerRoutes(app: Express): void {
   // Configuração do Supabase
   const supabaseUrl = process.env.SUPABASE_URL;
@@ -93,7 +159,11 @@ export function registerRoutes(app: Express): void {
       console.log(`[${new Date().toISOString()}] 🔍 Buscando produtos...`);
       
       const result = await retryWithBackoff(async () => {
-        return await supabase.from("produtos").select("*");
+        return await supabase
+          .from("produtos")
+          .select("id, name, description, price, original_price, image_url, category, download_url, is_active, is_featured, tags")
+          .eq("is_active", true) // Só produtos ativos
+          .order("created_at", { ascending: false });
       }, 2, 500);
 
       const { data: produtos, error } = result;
@@ -104,7 +174,7 @@ export function registerRoutes(app: Express): void {
         if (error.message?.includes("does not exist") || error.message?.includes("não existe")) {
           return res.status(404).json({ 
             error: "Tabela 'produtos' não encontrada",
-            instructions: "Crie a tabela 'produtos' no Supabase com os campos: id, name, description, price, image_url",
+            instructions: "Verifique se a tabela 'produtos' existe no Supabase",
             details: error.message 
           });
         }
@@ -135,7 +205,7 @@ export function registerRoutes(app: Express): void {
     }
   });
 
-  // NOVA ROTA: POST /api/payments/criar-pagamento - Para o frontend
+  // ROTA PRINCIPAL: POST /api/payments/criar-pagamento - Para o frontend
   app.post("/api/payments/criar-pagamento", async (req, res) => {
     try {
       console.log(`[${new Date().toISOString()}] 🛒 Dados recebidos:`, JSON.stringify(req.body, null, 2));
@@ -153,11 +223,26 @@ export function registerRoutes(app: Express): void {
 
       const { carrinho, nomeCliente, email, total } = validation.data;
 
-      if (!payment) {
+      if (!payment || !supabase) {
         return res.status(500).json({ 
-          error: "Mercado Pago não configurado. Verifique a variável MERCADO_PAGO_ACCESS_TOKEN." 
+          error: "Serviços não configurados. Verifique Mercado Pago e Supabase." 
         });
       }
+
+      // 🔥 BUSCAR PRODUTOS DO SUPABASE INCLUINDO download_url
+      console.log(`[${new Date().toISOString()}] 🔍 Buscando produtos no Supabase...`);
+      const produtos = await buscarProdutosCarrinho(supabase, carrinho);
+      
+      if (produtos.length === 0) {
+        return res.status(404).json({
+          error: "Produtos não encontrados no banco de dados",
+          carrinho_ids: carrinho.map(item => item.id)
+        });
+      }
+
+      console.log(`[${new Date().toISOString()}] 📦 Produtos encontrados:`, 
+        produtos.map(p => ({ id: p.id, name: p.name, has_download: !!p.download_url }))
+      );
 
       // Criar descrição baseada no carrinho
       const firstItem = carrinho[0];
@@ -165,15 +250,6 @@ export function registerRoutes(app: Express): void {
       const description = carrinho.length === 1 
         ? itemName
         : `Compra de ${carrinho.length} produtos - ${itemName} e outros`;
-
-      // O preço não vem no item, então usamos o total dividido pela quantidade total
-      const totalQuantity = carrinho.reduce((sum, item) => sum + item.quantity, 0);
-      console.log(`[${new Date().toISOString()}] 📊 Informações do carrinho:`, {
-        total_recebido: total,
-        total_itens: carrinho.length,
-        quantidade_total: totalQuantity,
-        primeiro_item: itemName
-      });
 
       const paymentData = {
         transaction_amount: total,
@@ -210,7 +286,17 @@ export function registerRoutes(app: Express): void {
         });
       }
 
-      // Extrair informações do pagamento
+      // 🔥 SALVAR PEDIDO NO BANCO
+      const pedidoSalvo = await salvarPedido(supabase, {
+        paymentId: paymentResponse.id,
+        email,
+        nomeCliente,
+        total,
+        carrinho,
+        produtos
+      });
+
+      // 🔥 MONTAR RESPOSTA COM DOWNLOAD_URLs CORRETOS
       const paymentInfo = {
         id: paymentResponse.id,
         status: paymentResponse.status,
@@ -219,18 +305,32 @@ export function registerRoutes(app: Express): void {
         ticket_url: paymentResponse.point_of_interaction?.transaction_data?.ticket_url || null,
         total: total,
         cliente: nomeCliente,
-        produtos: carrinho.map(item => ({
-          id: item.id,
-          nome: item.name,
-          quantidade: item.quantity
-        }))
+        produtos: produtos.map(produto => {
+          const itemCarrinho = carrinho.find(c => String(c.id) === String(produto.id));
+          return {
+            id: produto.id,
+            nome: produto.name,
+            quantidade: itemCarrinho?.quantity || 1,
+            preco: produto.price,
+            download_url: produto.download_url // 🔥 INCLUINDO O DOWNLOAD_URL CORRETO!
+          };
+        }),
+        // 🔥 URLs DE DOWNLOAD SEPARADOS PARA FÁCIL ACESSO
+        download_urls: produtos
+          .filter(p => p.download_url) // Só produtos com download
+          .map(p => ({
+            produto_id: p.id,
+            produto_nome: p.name,
+            download_url: p.download_url
+          })),
+        pedido_id: pedidoSalvo?.id || null
       };
 
-      console.log(`[${new Date().toISOString()}] ✅ Pagamento criado com sucesso:`, { 
+      console.log(`[${new Date().toISOString()}] ✅ Pagamento criado com download_urls:`, { 
         id: paymentInfo.id, 
         status: paymentInfo.status,
-        qr_code_exists: !!paymentInfo.qr_code,
-        qr_code_base64_exists: !!paymentInfo.qr_code_base64
+        download_urls_count: paymentInfo.download_urls.length,
+        urls: paymentInfo.download_urls.map(u => ({ produto: u.produto_nome, has_url: !!u.download_url }))
       });
 
       res.json(paymentInfo);
@@ -267,7 +367,178 @@ export function registerRoutes(app: Express): void {
     }
   });
 
-  // ROTA ORIGINAL MANTIDA: POST /criar-pagamento - Para compatibilidade
+  // 🔥 NOVA ROTA: Verificar status do pagamento e retornar downloads
+  app.get("/api/payments/status-pagamento/:paymentId", async (req, res) => {
+    const { paymentId } = req.params;
+
+    if (!paymentId) {
+      return res.status(400).json({ error: "ID de pagamento ausente." });
+    }
+
+    if (!client || !supabase) {
+      return res.status(500).json({ error: "Serviços não configurados." });
+    }
+
+    try {
+      // 1. Consultar status no Mercado Pago
+      const paymentStatus = await new Payment(client).get({ id: paymentId });
+      
+      // 2. Buscar pedido no banco
+      const { data: pedido, error: pedidoError } = await supabase
+        .from("pedidos")
+        .select(`
+          id,
+          email,
+          nome_cliente,
+          valor_total,
+          status,
+          created_at,
+          pedido_itens (
+            produto_id,
+            quantidade,
+            preco_unitario,
+            produto:produtos (
+              id,
+              name,
+              description,
+              price,
+              download_url
+            )
+          )
+        `)
+        .eq("payment_id", paymentId)
+        .single();
+
+      // 3. Atualizar status do pedido se necessário
+      if (paymentStatus.status === 'approved' && pedido && pedido.status !== 'approved') {
+        await supabase
+          .from("pedidos")
+          .update({ status: 'approved' })
+          .eq("payment_id", paymentId);
+      }
+
+      // 4. Montar resposta completa
+      const response = {
+        payment: {
+          id: paymentStatus.id,
+          status: paymentStatus.status,
+          status_detail: paymentStatus.status_detail,
+          transaction_amount: paymentStatus.transaction_amount,
+          date_approved: paymentStatus.date_approved,
+          date_created: paymentStatus.date_created,
+        },
+        pedido: pedido ? {
+          id: pedido.id,
+          email: pedido.email,
+          nome_cliente: pedido.nome_cliente,
+          valor_total: pedido.valor_total,
+          status: pedido.status,
+          created_at: pedido.created_at,
+          produtos: pedido.pedido_itens?.map((item: any) => ({
+            id: item.produto.id,
+            nome: item.produto.name,
+            quantidade: item.quantidade,
+            preco: item.preco_unitario,
+            download_url: item.produto.download_url
+          })) || []
+        } : null,
+        // 🔥 DOWNLOADS DISPONÍVEIS (só se pagamento aprovado)
+        downloads_disponiveis: paymentStatus.status === 'approved' && pedido ? 
+          pedido.pedido_itens
+            ?.filter((item: any) => item.produto.download_url)
+            .map((item: any) => ({
+              produto_id: item.produto.id,
+              produto_nome: item.produto.name,
+              download_url: item.produto.download_url
+            })) || []
+          : []
+      };
+
+      return res.json(response);
+    } catch (error: any) {
+      console.error("[Pagamento] Erro ao consultar status:", error.message);
+      return res.status(500).json({
+        error: "Erro ao consultar status do pagamento",
+        details: error.message,
+      });
+    }
+  });
+
+  // 🔥 NOVA ROTA: Buscar downloads direto por paymentId (para clientes)
+  app.get("/api/payments/downloads/:paymentId", async (req, res) => {
+    const { paymentId } = req.params;
+
+    if (!supabase) {
+      return res.status(500).json({ error: "Supabase não configurado." });
+    }
+
+    try {
+      console.log(`[${new Date().toISOString()}] 🔍 Buscando downloads para payment: ${paymentId}`);
+
+      // Buscar pedido aprovado com produtos
+      const { data: pedido, error } = await supabase
+        .from("pedidos")
+        .select(`
+          id,
+          email,
+          nome_cliente,
+          valor_total,
+          status,
+          created_at,
+          pedido_itens (
+            quantidade,
+            produto:produtos (
+              id,
+              name,
+              description,
+              price,
+              download_url
+            )
+          )
+        `)
+        .eq("payment_id", paymentId)
+        .eq("status", "approved")
+        .single();
+
+      if (error || !pedido) {
+        console.error(`[${new Date().toISOString()}] ❌ Pedido não encontrado ou não aprovado:`, error?.message);
+        return res.status(404).json({ 
+          error: "Pedido não encontrado ou pagamento ainda não aprovado",
+          suggestion: "Verifique se o pagamento foi processado com sucesso"
+        });
+      }
+
+      // Extrair downloads disponíveis
+      const downloads = pedido.pedido_itens
+        ?.filter((item: any) => item.produto.download_url)
+        .map((item: any) => ({
+          produto_id: item.produto.id,
+          nome: item.produto.name,
+          descricao: item.produto.description,
+          quantidade: item.quantidade,
+          download_url: item.produto.download_url
+        })) || [];
+
+      const response = {
+        pedido_id: pedido.id,
+        cliente: pedido.nome_cliente,
+        email: pedido.email,
+        total: pedido.valor_total,
+        data_compra: pedido.created_at,
+        downloads_disponiveis: downloads,
+        total_downloads: downloads.length,
+        status: "aprovado"
+      };
+
+      console.log(`[${new Date().toISOString()}] ✅ Downloads encontrados: ${downloads.length}`);
+      return res.json(response);
+    } catch (err) {
+      console.error(`[${new Date().toISOString()}] ❌ Erro ao buscar downloads:`, err);
+      res.status(500).json({ error: "Erro ao buscar downloads" });
+    }
+  });
+
+  // ROTA ORIGINAL MANTIDA: POST /criar-pagamento - Para compatibilidade com produto individual
   app.post("/criar-pagamento", async (req, res) => {
     try {
       // Validar dados de entrada
@@ -293,14 +564,15 @@ export function registerRoutes(app: Express): void {
         });
       }
 
-      // Buscar o produto no Supabase
+      // Buscar o produto no Supabase INCLUINDO download_url
       console.log(`[${new Date().toISOString()}] 🔍 Buscando produto com ID: ${produtoId}`);
       
       const { data: produto, error: produtoError } = await retryWithBackoff(async () => {
         return await supabase
           .from("produtos")
-          .select("*")
+          .select("id, name, description, price, original_price, download_url, image_url, category") // 🔥 INCLUINDO download_url
           .eq("id", parseInt(produtoId))
+          .eq("is_active", true) // Só produtos ativos
           .single();
       }, 2, 500);
 
@@ -315,7 +587,8 @@ export function registerRoutes(app: Express): void {
       console.log(`[${new Date().toISOString()}] 📋 Produto encontrado:`, { 
         id: produto.id, 
         name: produto.name, 
-        price: produto.price 
+        price: produto.price,
+        has_download: !!produto.download_url
       });
 
       // Criar pagamento Pix no Mercado Pago
@@ -352,20 +625,36 @@ export function registerRoutes(app: Express): void {
         });
       }
 
-      
+      // 🔥 SALVAR PEDIDO INDIVIDUAL
+      const pedidoSalvo = await salvarPedido(supabase, {
+        paymentId: paymentResponse.id,
+        email,
+        nomeCliente: email.split('@')[0], // Nome baseado no email
+        total: amount,
+        carrinho: [{ id: produto.id, name: produto.name, quantity: 1 }],
+        produtos: [produto]
+      });
 
-      // Extrair informações do pagamento
+      // 🔥 INCLUIR download_url NA RESPOSTA
       const paymentInfo = {
         id: paymentResponse.id,
         status: paymentResponse.status,
         qr_code: paymentResponse.point_of_interaction?.transaction_data?.qr_code || null,
         qr_code_base64: paymentResponse.point_of_interaction?.transaction_data?.qr_code_base64 || null,
         ticket_url: paymentResponse.point_of_interaction?.transaction_data?.ticket_url || null,
+        produto: {
+          id: produto.id,
+          nome: produto.name,
+          preco: produto.price,
+          download_url: produto.download_url // 🔥 DOWNLOAD_URL CORRETO!
+        },
+        pedido_id: pedidoSalvo?.id || null
       };
 
       console.log(`[${new Date().toISOString()}] ✅ Pagamento criado:`, { 
         id: paymentInfo.id, 
-        status: paymentInfo.status 
+        status: paymentInfo.status,
+        has_download_url: !!produto.download_url
       });
 
       res.json(paymentInfo);
@@ -401,38 +690,6 @@ export function registerRoutes(app: Express): void {
       });
     }
   });
-  app.get("/api/payments/status-pagamento/:paymentId", async (req, res) => {
-  const { paymentId } = req.params;
-
-  if (!paymentId) {
-    return res.status(400).json({ error: "ID de pagamento ausente." });
-  }
-
-  if (!client) {
-    return res.status(500).json({ error: "Cliente Mercado Pago não configurado." });
-  }
-
-  try {
-    const paymentStatus = await new Payment(client).get({ id: paymentId });
-
-    return res.json({
-      id: paymentStatus.id,
-      status: paymentStatus.status,
-      status_detail: paymentStatus.status_detail,
-      payer_email: paymentStatus.payer?.email,
-      transaction_amount: paymentStatus.transaction_amount,
-      date_approved: paymentStatus.date_approved,
-      date_created: paymentStatus.date_created,
-    });
-  } catch (error: any) {
-    console.error("[Pagamento] Erro ao consultar status:", error.message);
-    return res.status(500).json({
-      error: "Erro ao consultar status do pagamento",
-      details: error.message,
-    });
-  }
-});
-
 
   // Rota de teste para verificar estrutura do carrinho
   app.post("/api/payments/test-carrinho", (req, res) => {
@@ -468,72 +725,13 @@ export function registerRoutes(app: Express): void {
     res.json({
       message: "API de pagamentos funcionando!",
       routes: [
-        "POST /api/payments/criar-pagamento (para carrinho)",
-        "POST /api/payments/test-carrinho (para testar estrutura)", 
-        "POST /criar-pagamento (para produto individual)"
+        "POST /api/payments/criar-pagamento (criar pagamento carrinho)",
+        "GET /api/payments/status-pagamento/:paymentId (consultar status)",
+        "GET /api/payments/downloads/:paymentId (buscar downloads)",
+        "POST /api/payments/test-carrinho (testar estrutura)", 
+        "POST /criar-pagamento (produto individual)"
       ],
       timestamp: new Date().toISOString()
     });
   });
-
-    // NOVA ROTA: Buscar links de download do pedido
-  app.get("/api/payments/link-download/:paymentId", async (req, res) => {
-    const { paymentId } = req.params;
-
-    if (!supabase) {
-      return res.status(500).json({ error: "Supabase não configurado." });
-    }
-
-    try {
-      console.log(`[${new Date().toISOString()}] 🔍 Buscando links de download para paymentId: ${paymentId}`);
-
-      // Busca pedido + downloads + produtos
-      const { data: pedido, error } = await supabase
-        .from("pedidos")
-        .select(`
-          id,
-          email,
-          valor_total,
-          created_at,
-          downloads (
-            link_temporario,
-            expires_at
-          ),
-          pedido_itens (
-            produto:produtos (
-              id,
-              name,
-              description,
-              price,
-              image_url,
-              category
-            )
-          )
-        `)
-        .eq("payment_id", paymentId)
-        .single();
-
-      if (error || !pedido) {
-        console.error(`[${new Date().toISOString()}] ❌ Pedido não encontrado:`, error?.message);
-        return res.status(404).json({ error: "Pedido não encontrado" });
-      }
-
-      // Extrair links e produtos
-      const links = pedido.downloads?.map((d: any) => d.link_temporario) || [];
-      const produtos = pedido.pedido_itens?.map((p: any) => p.produto) || [];
-
-      return res.json({
-        links,
-        products: produtos,
-        customerName: pedido.email,
-        total: pedido.valor_total,
-        downloadedAt: new Date().toISOString(),
-        expiresIn: "7 dias"
-      });
-    } catch (err) {
-      console.error(`[${new Date().toISOString()}] ❌ Erro ao buscar links:`, err);
-      res.status(500).json({ error: "Erro ao buscar links de download" });
-    }
-  });
-
 }
